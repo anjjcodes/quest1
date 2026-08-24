@@ -1,0 +1,18 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+
+# App data (downloads, audio, extracted frames)
+data/
+*.env
+.env
+
+# OS / editor
+.DS_Store
+.vscode/
+.idea/
