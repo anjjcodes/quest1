@@ -39,7 +39,18 @@ include = ["dialogue_locator*"]
 [tool.pytest.ini_options]
 testpaths = ["src/tests"]
 pythonpath = ["src"]
-log_cli = false
+# -ra: summary of skipped/failed reasons at the end
+addopts = "-ra"
+# Live logging: every logger.info()+ from the modules under test streams to the
+# terminal while the tests run, grouped per test under "live log setup/call".
+log_cli = true
+log_cli_level = "INFO"
+log_cli_format = "%(asctime)s.%(msecs)03d %(levelname)-7s %(name)s: %(message)s"
+log_cli_date_format = "%H:%M:%S"
+# Captured logs (shown in the failure report) keep DEBUG for post-mortem detail.
+log_level = "DEBUG"
+log_format = "%(asctime)s.%(msecs)03d %(levelname)-7s %(name)s: %(message)s"
+log_date_format = "%H:%M:%S"
 
 [tool.ruff]
 line-length = 100

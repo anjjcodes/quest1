@@ -64,8 +64,9 @@ class WhisperConfig(BaseModel):
     verify_model: str = Field("medium", description="Model for the verification pass.")
     device: Literal["auto", "cpu", "cuda"] = "auto"
     compute_type: str = Field(
-        "default",
-        description="ctranslate2 compute type, e.g. int8, int8_float16, float16, float32.",
+        "int8",
+        description="ctranslate2 compute type. int8 is fastest on CPU (incl. Apple Silicon); "
+        "use float16 or int8_float16 on CUDA GPUs; float32 for maximum accuracy.",
     )
     cpu_threads: int = Field(0, ge=0, description="0 = let ctranslate2 decide.")
     language: str | None = Field(

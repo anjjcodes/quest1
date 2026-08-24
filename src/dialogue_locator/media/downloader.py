@@ -43,14 +43,17 @@ def validate_url(url: str) -> str:
     """Return the cleaned URL or raise ``InvalidURLError``."""
     cleaned = (url or "").strip()
     if not cleaned:
+        logger.warning("Rejected input: empty video URL")
         raise InvalidURLError("Video URL is empty.")
     parsed = urlparse(cleaned)
     if parsed.scheme not in _ALLOWED_SCHEMES:
+        logger.warning("Rejected URL %r: unsupported scheme %r", cleaned, parsed.scheme)
         raise InvalidURLError(
             f"URL must start with http:// or https:// (got scheme '{parsed.scheme or 'none'}').",
             details={"url": cleaned},
         )
     if not parsed.netloc or "." not in parsed.netloc:
+        logger.warning("Rejected URL %r: no valid host", cleaned)
         raise InvalidURLError("URL has no valid host.", details={"url": cleaned})
     return cleaned
 
@@ -88,6 +91,7 @@ class VideoDownloader:
         """
         source = (source or "").strip()
         if not source:
+            logger.warning("Rejected input: empty video source")
             raise InvalidURLError("Video source is empty.")
 
         if is_url(source):
@@ -106,11 +110,12 @@ class VideoDownloader:
     def _resolve_local(source: str) -> Path:
         path = Path(source).expanduser()
         if not path.is_file():
+            logger.warning("Rejected input: %r is neither an http(s) URL nor an existing file", source)
             raise InvalidURLError(
                 f"'{source}' is neither an http(s) URL nor an existing file.",
                 details={"source": source},
             )
-        logger.info("Using local video file: %s", path)
+        logger.info("Using local media file: %s", path)
         return path.resolve()
 
     # ------------------------------------------------------------------ #
@@ -182,21 +187,25 @@ class VideoDownloader:
                 self._last_title = info.get("title")
                 path = self._resolve_downloaded_path(ydl, info)
         except UnsupportedError as exc:
+            logger.error("Unsupported URL %s: %s", url, exc)
             raise UnsupportedVideoError(
                 f"This URL is not supported by the downloader: {url}", details={"url": url}
             ) from exc
         except (YtDlpDownloadError, ExtractorError) as exc:
+            logger.error("yt-dlp failed for %s: %s", url, _clean_ytdlp_message(exc))
             raise DownloadError(
                 f"Download failed: {_clean_ytdlp_message(exc)}", details={"url": url}
             ) from exc
         except DownloadError:
             raise
         except Exception as exc:  # noqa: BLE001 - boundary: wrap anything from yt-dlp
+            logger.exception("Unexpected downloader error for %s", url)
             raise DownloadError(
                 f"Unexpected error while downloading: {exc}", details={"url": url}
             ) from exc
 
         if not path.is_file() or path.stat().st_size == 0:
+            logger.error("yt-dlp reported success but %s is missing/empty", path)
             raise DownloadError(
                 "Download reported success but no file was produced.",
                 details={"url": url, "expected_path": str(path)},
@@ -256,6 +265,7 @@ class VideoDownloader:
     def _describe(self, path: Path, source: str, title: str | None) -> VideoInfo:
         probe = probe_media(path, self._ffprobe)
         if not probe.has_video:
+            logger.error("No video stream in %s", path)
             raise UnsupportedVideoError(
                 f"File has no video stream: {path.name}", details={"path": str(path)}
             )

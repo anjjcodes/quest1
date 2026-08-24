@@ -53,6 +53,7 @@ class AudioExtractor:
         reuse_existing: bool = True,
     ) -> AudioInfo:
         """Extract the full audio track of ``video`` into ``dest_dir/audio.wav``."""
+        ensure_binary(self._config.ffmpeg_binary)  # fail fast, before any work or logging
         dest_dir.mkdir(parents=True, exist_ok=True)
         out_path = dest_dir / _AUDIO_FILENAME
 
@@ -91,9 +92,11 @@ class AudioExtractor:
         Timestamps in the resulting clip are relative to ``start``; callers
         must add ``start`` back to map them to the video timeline.
         """
+        ensure_binary(self._config.ffmpeg_binary)
         start = max(0.0, float(start))
         end = float(end)
         if end <= start:
+            logger.error("Invalid clip range %.3f-%.3f", start, end)
             raise AudioExtractionError(
                 f"Invalid clip range: start={start:.3f} must be < end={end:.3f}",
                 details={"start": start, "end": end},
@@ -180,6 +183,7 @@ class AudioExtractor:
         except subprocess.TimeoutExpired as exc:
             proc.kill()
             proc.communicate()
+            logger.error("ffmpeg timed out after %ds, killed (output %s)", self._config.timeout_seconds, out_path)
             raise AudioExtractionError(
                 f"ffmpeg timed out after {self._config.timeout_seconds}s",
                 details={"output": str(out_path)},
@@ -188,12 +192,14 @@ class AudioExtractor:
         if proc.returncode != 0:
             message = (stderr or "").strip().splitlines()
             tail = message[-1] if message else "unknown ffmpeg error"
+            logger.error("ffmpeg failed (exit %d): %s", proc.returncode, tail)
             raise AudioExtractionError(
                 f"ffmpeg failed (exit {proc.returncode}): {tail}",
                 details={"output": str(out_path), "stderr": "\n".join(message[-10:])},
             )
 
         if not out_path.is_file():
+            logger.error("ffmpeg reported success but %s does not exist", out_path)
             raise AudioExtractionError(
                 "ffmpeg reported success but produced no file", details={"output": str(out_path)}
             )
@@ -201,6 +207,7 @@ class AudioExtractor:
     def _require_audio_stream(self, path: Path) -> None:
         probe = probe_media(path, self._config.ffprobe_binary)
         if not probe.has_audio:
+            logger.error("No audio stream in %s; cannot transcribe", path)
             raise AudioExtractionError(
                 f"'{path.name}' has no audio stream, so the dialogue cannot be transcribed.",
                 details={"path": str(path)},
@@ -209,6 +216,7 @@ class AudioExtractor:
     def _describe(self, path: Path) -> AudioInfo:
         probe = probe_media(path, self._config.ffprobe_binary)
         if not probe.has_audio or not probe.duration or probe.duration <= 0:
+            logger.error("Extracted file %s has no audio data (duration=%s)", path, probe.duration)
             raise AudioExtractionError(
                 f"'{path.name}' contains no audio data (requested range beyond end of media, "
                 "or source has no decodable audio).",

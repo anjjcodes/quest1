@@ -40,6 +40,7 @@ def ensure_binary(name: str) -> str:
     """Return the resolved path of an executable or raise ``ConfigurationError``."""
     resolved = shutil.which(name)
     if resolved is None:
+        logger.error("Required binary '%s' not found on PATH", name)
         raise ConfigurationError(
             f"Required binary '{name}' not found on PATH. Install FFmpeg "
             "(https://ffmpeg.org) and make sure ffmpeg/ffprobe are executable.",
@@ -81,6 +82,7 @@ def probe_media(path: Path, ffprobe_binary: str = "ffprobe", timeout: int = 60) 
     """
     binary = ensure_binary(ffprobe_binary)
     if not path.is_file():
+        logger.error("Media file does not exist: %s", path)
         raise UnsupportedVideoError(f"Media file does not exist: {path}", details={"path": str(path)})
 
     cmd = [
@@ -102,6 +104,7 @@ def probe_media(path: Path, ffprobe_binary: str = "ffprobe", timeout: int = 60) 
         ) from exc
 
     if completed.returncode != 0:
+        logger.error("ffprobe failed on %s (exit %d): %s", path, completed.returncode, completed.stderr.strip())
         raise UnsupportedVideoError(
             f"ffprobe could not read {path.name}: {completed.stderr.strip() or 'unknown error'}",
             details={"path": str(path), "stderr": completed.stderr.strip()},
@@ -120,6 +123,7 @@ def probe_media(path: Path, ffprobe_binary: str = "ffprobe", timeout: int = 60) 
     audio = next((s for s in streams if s.get("codec_type") == "audio"), None)
 
     if video is None and audio is None:
+        logger.error("No audio or video streams in %s", path)
         raise UnsupportedVideoError(
             f"No audio or video streams found in {path.name}", details={"path": str(path)}
         )

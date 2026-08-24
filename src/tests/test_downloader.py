@@ -9,7 +9,7 @@ from dialogue_locator.exceptions import DownloadError, InvalidURLError, Unsuppor
 from dialogue_locator.media import downloader as dl_module
 from dialogue_locator.media.downloader import VideoDownloader, is_url, validate_url
 from dialogue_locator.models import PipelineStage, ProgressEvent
-from tests.conftest import requires_ffmpeg
+from tests.conftest import expect_error, requires_ffmpeg
 
 
 # --------------------------------------------------------------------------- #
@@ -31,7 +31,7 @@ def test_validate_url_accepts(url):
 
 @pytest.mark.parametrize("url", ["", "   ", "ftp://x.com/v", "youtube.com/watch", "http://nohost", "/tmp/x.mp4"])
 def test_validate_url_rejects(url):
-    with pytest.raises(InvalidURLError):
+    with expect_error(InvalidURLError):
         validate_url(url)
 
 
@@ -55,18 +55,18 @@ def test_fetch_local_file(sample_video: Path, tmp_path: Path):
 
 @requires_ffmpeg
 def test_fetch_local_missing_file(tmp_path: Path):
-    with pytest.raises(InvalidURLError):
+    with expect_error(InvalidURLError):
         VideoDownloader(DownloadConfig()).fetch(str(tmp_path / "missing.mp4"), tmp_path)
 
 
 @requires_ffmpeg
 def test_fetch_audio_only_file_is_unsupported(sample_wav: Path, tmp_path: Path):
-    with pytest.raises(UnsupportedVideoError):
+    with expect_error(UnsupportedVideoError):
         VideoDownloader(DownloadConfig()).fetch(str(sample_wav), tmp_path)
 
 
 def test_fetch_empty_source(tmp_path: Path):
-    with pytest.raises(InvalidURLError):
+    with expect_error(InvalidURLError):
         VideoDownloader(DownloadConfig()).fetch("", tmp_path)
 
 
@@ -143,7 +143,7 @@ def test_fetch_url_success(fake_ydl, tmp_path: Path):
 )
 def test_fetch_url_error_mapping(fake_ydl, tmp_path: Path, behaviour, expected):
     fake_ydl.behaviour = behaviour
-    with pytest.raises(expected) as exc:
+    with expect_error(expected) as exc:
         VideoDownloader(DownloadConfig()).fetch("https://example.com/v", tmp_path / "job", reuse_existing=False)
     assert exc.value.stage == "download"
     if behaviour == "ytdlp_error":
@@ -182,5 +182,5 @@ def test_real_youtube_download(tmp_path: Path):
 
 @pytest.mark.network
 def test_real_invalid_video(tmp_path: Path):
-    with pytest.raises(DownloadError):
+    with expect_error(DownloadError):
         VideoDownloader(DownloadConfig()).fetch("https://www.youtube.com/watch?v=xxxxxxxxxxx", tmp_path / "bad")

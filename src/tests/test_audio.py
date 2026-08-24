@@ -8,7 +8,7 @@ from dialogue_locator.config import AudioConfig
 from dialogue_locator.exceptions import AudioExtractionError, ConfigurationError
 from dialogue_locator.media.audio import AudioExtractor
 from dialogue_locator.models import PipelineStage, ProgressEvent, VideoInfo
-from tests.conftest import requires_ffmpeg
+from tests.conftest import expect_error, requires_ffmpeg
 
 pytestmark = requires_ffmpeg
 
@@ -63,14 +63,14 @@ def test_extract_reuses_existing(extractor: AudioExtractor, sample_video: Path, 
 
 
 def test_extract_no_audio_stream(extractor: AudioExtractor, silent_video: Path, tmp_path: Path):
-    with pytest.raises(AudioExtractionError) as exc:
+    with expect_error(AudioExtractionError) as exc:
         extractor.extract(_video_info(silent_video, 2.0), tmp_path)
     assert "no audio stream" in exc.value.message
     assert exc.value.stage == "audio"
 
 
 def test_extract_missing_ffmpeg(sample_video: Path, tmp_path: Path):
-    with pytest.raises(ConfigurationError):
+    with expect_error(ConfigurationError):
         AudioExtractor(AudioConfig(ffmpeg_binary="ffmpeg-does-not-exist")).extract(
             _video_info(sample_video), tmp_path
         )
@@ -95,12 +95,12 @@ def test_extract_clip_clamps_negative_start(extractor: AudioExtractor, sample_wa
 
 
 def test_extract_clip_invalid_range(extractor: AudioExtractor, sample_wav: Path, tmp_path: Path):
-    with pytest.raises(AudioExtractionError):
+    with expect_error(AudioExtractionError):
         extractor.extract_clip(sample_wav, 3.0, 1.0, tmp_path / "clip.wav")
 
 
 def test_extract_clip_beyond_end(extractor: AudioExtractor, sample_wav: Path, tmp_path: Path):
-    with pytest.raises(AudioExtractionError) as exc:
+    with expect_error(AudioExtractionError) as exc:
         extractor.extract_clip(sample_wav, 100.0, 110.0, tmp_path / "clip.wav")
     assert "no audio data" in exc.value.message
 
@@ -127,6 +127,6 @@ def test_extract_timeout(sample_video: Path, tmp_path: Path, monkeypatch):
         audio_module, "probe_media", lambda *a, **k: MediaProbe(duration=3.0, has_video=True, has_audio=True)
     )
     monkeypatch.setattr(audio_module.subprocess, "Popen", lambda *a, **k: HangingProc())
-    with pytest.raises(AudioExtractionError) as exc:
+    with expect_error(AudioExtractionError) as exc:
         AudioExtractor(AudioConfig(timeout_seconds=1)).extract(_video_info(sample_video), tmp_path)
     assert "timed out" in exc.value.message

@@ -4,7 +4,7 @@ import pytest
 
 from dialogue_locator.exceptions import ConfigurationError, UnsupportedVideoError
 from dialogue_locator.media.probe import _parse_rate, ensure_binary, probe_media
-from tests.conftest import requires_ffmpeg
+from tests.conftest import expect_error, requires_ffmpeg
 
 
 @pytest.mark.parametrize(
@@ -16,7 +16,7 @@ def test_parse_rate(value, expected):
 
 
 def test_ensure_binary_missing():
-    with pytest.raises(ConfigurationError) as exc:
+    with expect_error(ConfigurationError) as exc:
         ensure_binary("definitely-not-a-binary-xyz")
     assert exc.value.stage == "config"
 
@@ -48,11 +48,11 @@ def test_probe_audio_only(sample_wav: Path):
 
 @requires_ffmpeg
 def test_probe_missing_file(tmp_path: Path):
-    with pytest.raises(UnsupportedVideoError):
+    with expect_error(UnsupportedVideoError):
         probe_media(tmp_path / "nope.mp4")
 
 
 @requires_ffmpeg
 def test_probe_non_media(not_media: Path):
-    with pytest.raises(UnsupportedVideoError):
+    with expect_error(UnsupportedVideoError):
         probe_media(not_media)
