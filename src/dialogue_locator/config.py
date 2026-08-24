@@ -154,8 +154,9 @@ class StorageConfig(BaseModel):
         description="Per-job results: extracted frame image and result JSON.",
     )
     keep_intermediate: bool = Field(
-        False,
-        description="Keep video/audio after a job finishes (useful for debugging).",
+        True,
+        description="Keep downloaded video/audio after a job. Repeated runs on the same URL "
+        "(e.g. a different dialogue) then skip download and extraction. Set False to save disk.",
     )
 
     @field_validator("work_dir", "output_dir", mode="before")

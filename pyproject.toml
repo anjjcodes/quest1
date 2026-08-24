@@ -31,6 +31,7 @@ dev = [
 
 [project.scripts]
 dialogue-locator = "dialogue_locator.cli:main"
+dialogue-locator-server = "dialogue_locator.api.app:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

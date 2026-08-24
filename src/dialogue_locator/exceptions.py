@@ -123,6 +123,12 @@ class NoMatchFoundError(DialogueLocatorError):
         return data
 
 
+class PipelineCancelledError(DialogueLocatorError):
+    """The caller asked the pipeline to stop (e.g. user cancelled the job)."""
+
+    stage = "pipeline"
+
+
 # --------------------------------------------------------------------------- #
 # Output
 # --------------------------------------------------------------------------- #
