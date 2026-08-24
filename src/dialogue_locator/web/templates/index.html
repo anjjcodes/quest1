@@ -1,0 +1,188 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>Dialogue Locator</title>
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+  <header class="app-header">
+    <div class="brand">
+      <span class="logo" aria-hidden="true">
+        <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 9h18M8 5v14M16 5v14"/><path d="M10 12l3 1.5-3 1.5z" fill="currentColor" stroke="none"/>
+        </svg>
+      </span>
+      <div>
+        <h1>Dialogue Locator</h1>
+        <p>Find the first frame where a spoken line occurs in a video</p>
+      </div>
+    </div>
+    <div class="header-right">
+      <div id="health" class="chips" title="Server configuration"></div>
+      <a class="link" href="/docs" target="_blank" rel="noopener">API docs</a>
+    </div>
+  </header>
+
+  <main class="app">
+    <!-- =========================================================== left column -->
+    <aside class="column column-left">
+
+      <section class="panel" id="form-card">
+        <header class="panel-head">
+          <h2><span class="step-no">1</span> Input</h2>
+        </header>
+        <form id="job-form" autocomplete="off" novalidate>
+          <div class="field">
+            <label for="source">Video URL or local file path</label>
+            <input id="source" name="source" type="text" required spellcheck="false"
+                   placeholder="https://ok.ru/video/248244667877">
+            <p class="hint">YouTube, ok.ru and any other yt-dlp supported site, or a path to a file on this machine.</p>
+          </div>
+          <div class="field">
+            <label for="dialogue">Dialogue to find</label>
+            <textarea id="dialogue" name="dialogue" rows="2" required
+                      placeholder="My mind rebels at stagnation"></textarea>
+            <p class="hint">Case and punctuation don't matter. Two or more words.</p>
+          </div>
+          <label class="check">
+            <input id="reuse" type="checkbox" checked>
+            <span>Reuse previously downloaded media for this URL</span>
+          </label>
+          <div class="form-actions">
+            <button id="submit-btn" type="submit" class="btn btn-primary">
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
+              Find dialogue
+            </button>
+            <button id="cancel-btn" type="button" class="btn btn-danger" hidden>Cancel job</button>
+          </div>
+          <p id="form-error" class="alert alert-error" role="alert" hidden></p>
+        </form>
+      </section>
+
+      <section class="panel" id="progress-card" hidden>
+        <header class="panel-head">
+          <h2><span class="step-no">2</span> Pipeline</h2>
+          <span id="job-id" class="job-tag"></span>
+        </header>
+
+        <ol class="stepper" id="stages">
+          <li data-stage="input"><span class="dot"></span><span class="name">Validate input</span><span class="meta"></span></li>
+          <li data-stage="download"><span class="dot"></span><span class="name">Download video</span><span class="meta"></span></li>
+          <li data-stage="audio"><span class="dot"></span><span class="name">Extract audio</span><span class="meta"></span></li>
+          <li data-stage="transcription"><span class="dot"></span><span class="name">Transcribe &amp; match</span><span class="meta"></span></li>
+          <li data-stage="verification"><span class="dot"></span><span class="name">Verify with large model</span><span class="meta"></span></li>
+          <li data-stage="frame"><span class="dot"></span><span class="name">Extract frame</span><span class="meta"></span></li>
+        </ol>
+
+        <div class="progress-wrap">
+          <div class="progress"><div id="progress-bar" class="bar"></div></div>
+          <div class="progress-text">
+            <span id="progress-message">Queued…</span>
+            <span id="progress-pct" class="pct"></span>
+          </div>
+        </div>
+
+        <div class="log-head">
+          <span>Event log</span>
+          <span id="log-count" class="muted"></span>
+        </div>
+        <ul id="event-log" class="log" aria-live="polite"></ul>
+      </section>
+    </aside>
+
+    <!-- =========================================================== right column -->
+    <section class="column column-right">
+
+      <section class="panel panel-result" id="result-card">
+        <header class="panel-head">
+          <h2><span class="step-no">3</span> Result</h2>
+          <span id="result-badge" class="badge" hidden></span>
+        </header>
+
+        <div id="result-empty" class="empty">
+          <svg viewBox="0 0 24 24" width="40" height="40" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 9h18M8 5v14M16 5v14"/>
+          </svg>
+          <p>The extracted frame, timestamp and matched text will appear here.</p>
+        </div>
+
+        <div id="result-found" hidden>
+          <figure class="frame">
+            <a id="frame-link" href="#" target="_blank" rel="noopener" title="Open full-size frame">
+              <img id="frame-img" alt="Extracted video frame">
+            </a>
+            <figcaption>
+              <span id="frame-caption"></span>
+              <a id="frame-download" class="link" href="#" download>Download</a>
+            </figcaption>
+          </figure>
+
+          <div class="output">
+            <div class="output-head">
+              <span>Output</span>
+              <button id="copy-btn" type="button" class="btn btn-ghost btn-sm">Copy</button>
+            </div>
+            <pre id="output-block" class="output-block"></pre>
+          </div>
+
+          <dl class="facts">
+            <div><dt>Match score</dt><dd id="r-score"></dd></div>
+            <div><dt>First pass</dt><dd id="r-firstpass"></dd></div>
+            <div><dt>Verification</dt><dd id="r-verify"></dd></div>
+            <div><dt>Audio scanned</dt><dd id="r-scanned"></dd></div>
+            <div><dt>Video</dt><dd id="r-video"></dd></div>
+            <div><dt>Processing time</dt><dd id="r-total"></dd></div>
+          </dl>
+
+          <div id="r-timings" class="timings"></div>
+          <ul id="r-warnings" class="warnings"></ul>
+        </div>
+
+        <div id="result-notfound" hidden>
+          <p class="lead">“<span id="nf-dialogue"></span>” was not found above the match threshold.</p>
+          <p class="muted">These are the closest transcript windows — use them to judge whether the dialogue text or the video is wrong.</p>
+          <table class="table">
+            <thead><tr><th class="num">Score</th><th>Timestamp</th><th>Transcript window</th></tr></thead>
+            <tbody id="nf-rows"></tbody>
+          </table>
+          <p id="nf-scanned" class="muted small"></p>
+        </div>
+
+        <div id="result-error" hidden>
+          <div class="alert alert-error">
+            <strong>Failed during <span id="err-stage"></span></strong>
+            <p id="err-message"></p>
+            <p id="err-hint" class="small"></p>
+          </div>
+          <pre id="err-details" class="code small" hidden></pre>
+        </div>
+
+        <details class="raw">
+          <summary>Raw result JSON</summary>
+          <pre id="result-json" class="code small"></pre>
+        </details>
+      </section>
+
+      <section class="panel" id="history-card">
+        <header class="panel-head">
+          <h2>Recent jobs</h2>
+          <button id="refresh-jobs" type="button" class="btn btn-ghost btn-sm">Refresh</button>
+        </header>
+        <table class="table jobs">
+          <thead><tr><th>Status</th><th>Dialogue</th><th>Source</th><th>Result</th><th>When</th><th></th></tr></thead>
+          <tbody id="job-rows"><tr><td colspan="6" class="muted">No jobs yet.</td></tr></tbody>
+        </table>
+      </section>
+    </section>
+  </main>
+
+  <footer class="app-footer">
+    Dialogue Locator · streaming Faster-Whisper + RapidFuzz + large-model verification · results are also written to <code>data/output/&lt;job&gt;/</code>
+  </footer>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

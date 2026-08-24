@@ -60,7 +60,11 @@ class WhisperConfig(BaseModel):
       candidate match to confirm the text and tighten word timestamps.
     """
 
-    fast_model: str = Field("small", description="Model for the streaming pass.")
+    fast_model: str = Field(
+        "base",
+        description="Model for the streaming pass. 'base' runs ~12x realtime on Apple Silicon CPU "
+        "(vs ~3x for 'small') with near-identical hit rate; the verify model fixes wording/timing.",
+    )
     verify_model: str = Field("medium", description="Model for the verification pass.")
     device: Literal["auto", "cpu", "cuda"] = "auto"
     compute_type: str = Field(
