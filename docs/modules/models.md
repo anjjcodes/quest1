@@ -13,16 +13,19 @@ def format_timestamp(seconds: float) -> str   # "HH:MM:SS.mmm"; clamps negatives
 
 ## Enums
 
-* `PipelineStage`: `input, download, audio, transcription, matching, verification, frame, done`
+* `PipelineStage`: `input, download, audio, transcription, matching, verification,
+  download_video, frame, face_detection, mouth_movement, done`
   — the vocabulary used by `ProgressEvent`, exceptions and the UI stepper.
 * `VerificationStatus`: `confirmed | rejected | skipped | failed`.
-* `ResultStatus`: `found | not_found`.
+* `ResultStatus`: `found | not_found | not_onscreen` (`not_onscreen` = heard at the timestamp but
+  no face on camera, or the face's mouth never moves; match/frame details are still populated).
 
 ## Media
 
 | Type | Fields | Produced by |
 |---|---|---|
-| `VideoInfo` | `path, source_url, title, duration, fps, width, height, frame_count` | `VideoDownloader.fetch` (facts from ffprobe, not the website) |
+| `MediaInfo` | `path, source_url, title, duration, has_video` | `VideoDownloader.fetch_search_media` (the cheap audio-first download) |
+| `VideoInfo` | `path, source_url, title, duration, fps, width, height, frame_count, clip_start` | `VideoDownloader.fetch_video_clip` (facts from ffprobe, not the website; `clip_start` maps source time → clip time) |
 | `AudioInfo` | `path, sample_rate, channels, duration` | `AudioExtractor.extract` / `extract_clip` |
 
 ## Transcription
@@ -57,7 +60,7 @@ threshold), so the "top-3 closest windows" report needs no extra type.
 ```python
 @dataclass(frozen=True)
 class VerificationOutcome:
-    verifier: str                 # "asr_large_model", later "visual_speaker" …
+    verifier: str                 # "asr_large_model"
     status: VerificationStatus
     score: float | None
     refined: MatchCandidate | None   # the verifier's own localisation, if it produced one
@@ -65,8 +68,24 @@ class VerificationOutcome:
     details: dict                 # model, clip bounds, timing, shift_seconds …
 ```
 
-Deliberately generic: a V2 visual verifier returns the same shape with `refined.start` = first
-frame where the speaker is visible.
+Deliberately generic: any future audio verifier (e.g. a second ASR engine) returns the same
+shape, and the pipeline folds `refined` candidates without knowing who produced them.
+
+## Vision (V2 / V3)
+
+```python
+@dataclass(frozen=True)
+class FaceBox: x, y, width, height, confidence          # pixel box, top-left origin
+@dataclass(frozen=True)
+class FaceDetectionResult: faces, image_width, image_height   # property: face_present
+@dataclass(frozen=True)
+class MouthMovementResult:
+    moving: bool | None           # None = indeterminate (too few frames with a face)
+    movement_score: float | None  # std-dev of mouth openness over the window
+    threshold: float
+    frames_analyzed, frames_with_face: int
+    window_start, window_end: float
+```
 
 ## Frame
 
@@ -90,6 +109,8 @@ class LocalizationResult:
     first_pass: MatchCandidate | None     # what the fast model found, before verification
     verifications: list[VerificationOutcome]
     frame: FrameInfo | None
+    face_detection: FaceDetectionResult | None   # V2; None = check not run
+    mouth_movement: MouthMovementResult | None   # V3; None = check not run
     near_misses: list[MatchCandidate]     # populated when NOT_FOUND
     warnings: list[str]                   # e.g. "asr_large_model: rejected - …"
     stage_timings: dict[str, float]       # seconds per stage + "total"

@@ -9,9 +9,8 @@ Guidelines
 * Stage modules raise the most specific exception that applies.
 * Third-party exceptions (yt-dlp, ffmpeg, ctranslate2, cv2) are caught at the
   stage boundary and re-raised as one of these, chained with ``from``.
-* ``NoMatchFoundError`` is *not* an error in the pipeline's own terms - the
-  pipeline returns a "not found" result with near-misses instead. It exists
-  for callers that prefer raise-semantics (e.g. the CLI exit code).
+* "Dialogue not found" is *not* an error in the pipeline's own terms - the
+  pipeline returns a "not found" result with near-misses instead.
 """
 
 from __future__ import annotations
@@ -96,31 +95,6 @@ class VerificationError(DialogueLocatorError):
     """The second-pass verifier failed. Usually downgraded to a warning."""
 
     stage = "verification"
-
-
-class NoMatchFoundError(DialogueLocatorError):
-    """No transcript window reached the match threshold.
-
-    ``near_misses`` holds the best-scoring windows (as plain dicts) so the
-    user can judge whether the dialogue text or the video is wrong.
-    """
-
-    stage = "matching"
-
-    def __init__(
-        self,
-        message: str = "Dialogue not found in video",
-        *,
-        near_misses: list[dict[str, Any]] | None = None,
-        details: dict[str, Any] | None = None,
-    ) -> None:
-        super().__init__(message, details=details)
-        self.near_misses: list[dict[str, Any]] = near_misses or []
-
-    def to_dict(self) -> dict[str, Any]:
-        data = super().to_dict()
-        data["near_misses"] = self.near_misses
-        return data
 
 
 class PipelineCancelledError(DialogueLocatorError):

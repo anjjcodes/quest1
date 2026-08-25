@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from dialogue_locator.exceptions import DownloadError, NoMatchFoundError
+from dialogue_locator.exceptions import DownloadError
 from dialogue_locator.models import (
     FrameInfo,
     LocalizationResult,
@@ -71,5 +71,3 @@ def test_exceptions_to_dict():
     e = DownloadError("boom", details={"url": "u"})
     assert e.to_dict() == {"error": "DownloadError", "stage": "download", "message": "boom", "details": {"url": "u"}}
     assert str(e) == "[download] boom"
-    n = NoMatchFoundError(near_misses=[{"score": 1}])
-    assert n.to_dict()["near_misses"] == [{"score": 1}]

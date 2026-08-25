@@ -1,30 +1,28 @@
 """Verifier interface.
 
-A verifier takes the first-pass :class:`MatchCandidate` plus everything the
-pipeline knows (audio, video, dialogue) and returns a
-:class:`VerificationOutcome`. Verifiers are chained by the pipeline; each
-one sees the candidate as refined by the previous ones.
+A verifier takes the first-pass :class:`MatchCandidate` plus the audio and
+dialogue the pipeline knows about and returns a :class:`VerificationOutcome`.
+Verifiers are chained by the pipeline; each one sees the candidate as refined
+by the previous ones. They exist to answer one question: *is this really the
+line, and exactly when does it start?*
 
-Version 1 ships one verifier (:class:`~dialogue_locator.verification.asr_verifier.AsrVerifier`,
-a larger Whisper model over a short window). Version 2's visual "is the speaker
-on camera" check plugs in here as another :class:`Verifier` subclass. Note that
-verification runs before any video is downloaded (``context.video`` is None for
-URL sources); a visual verifier should fetch its own clip on demand via
-``VideoDownloader.fetch_video_clip`` (cheap - a few seconds around the
-candidate) and can return a ``refined`` candidate whose ``start`` is the first
-frame the speaker is visible. Nothing upstream needs to change.
+V1 ships one verifier (:class:`~dialogue_locator.verification.asr_verifier.AsrVerifier`,
+a larger Whisper model over a short window); another audio-based check (e.g.
+a second ASR engine as an independent judge) would plug in here. The visual
+checks (V2 face presence, V3 mouth movement) are *not* verifiers: they judge
+onscreen-ness after the frame exists, so they run as their own pipeline
+stages (see ``vision/`` and the pipeline docstring).
 """
 
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
 
 import numpy as np
 
-from dialogue_locator.models import MatchCandidate, VerificationOutcome, VideoInfo
+from dialogue_locator.models import MatchCandidate, VerificationOutcome
 
 
 @dataclass
@@ -35,8 +33,6 @@ class VerificationContext:
     audio_samples: np.ndarray  # float32, 16 kHz mono, full track
     audio_path: Path
     sample_rate: int = 16_000
-    video: VideoInfo | None = None  # lets V2 verifiers open the video file
-    extra: dict[str, Any] = field(default_factory=dict)  # free-form, for future verifiers
 
     @property
     def audio_duration(self) -> float:
@@ -58,6 +54,9 @@ class Verifier(ABC):
 
     #: Identifier recorded in :attr:`VerificationOutcome.verifier`.
     name: str = "verifier"
+
+    def warm_up(self) -> None:
+        """Load models / allocate resources ahead of the first job. Optional."""
 
     @abstractmethod
     def verify(self, candidate: MatchCandidate, context: VerificationContext) -> VerificationOutcome:

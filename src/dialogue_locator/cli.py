@@ -91,7 +91,7 @@ def format_result(result: LocalizationResult) -> str:
             f"Frame     : {result.frame_number}",
             f'Text      : "{result.matched_text}"',
             f"Image     : {result.frame.image_path if result.frame else '-'}",
-            f"Score     : {result.match.score:.1f}" if result.match else "",
+            f"Score     : {result.match.score:.1f}",
         ]
         if result.face_present is True:
             faces = result.face_detection.faces

@@ -19,7 +19,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from dialogue_locator.api.schemas import JobStatus
+from dialogue_locator.api.schemas import JobStatus, SettingsView
 from dialogue_locator.exceptions import DialogueLocatorError, PipelineCancelledError
 from dialogue_locator.models import LocalizationResult, ProgressEvent
 from dialogue_locator.pipeline import DialoguePipeline, PipelineRequest, save_result
@@ -38,7 +38,7 @@ def _now() -> datetime:
 class Job:
     request: PipelineRequest
     pipeline: DialoguePipeline | None = None  # per-job override; None = manager default
-    settings_view: Any | None = None  # normalised SettingsView echoed in responses
+    settings_view: SettingsView | None = None  # normalised settings echoed in responses
     status: JobStatus = JobStatus.QUEUED
     created_at: datetime = field(default_factory=_now)
     started_at: datetime | None = None
@@ -73,7 +73,7 @@ class JobManager:
         self,
         request: PipelineRequest,
         pipeline: DialoguePipeline | None = None,
-        settings_view: Any | None = None,
+        settings_view: SettingsView | None = None,
     ) -> Job:
         job = Job(request=request, pipeline=pipeline, settings_view=settings_view)
         with self._lock:

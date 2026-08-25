@@ -37,22 +37,30 @@ def validate_url(url) -> str          # InvalidURLError on empty / bad scheme / 
 
 class VideoDownloader:
     def __init__(self, config: DownloadConfig, ffprobe_binary="ffprobe")
-    def fetch(self, source, dest_dir, progress=None, reuse_existing=True) -> VideoInfo
+    def fetch_search_media(self, source, dest_dir, progress=None, reuse_existing=True) -> MediaInfo
+    def fetch_video_clip(self, source, start, end, dest_dir, progress=None, reuse_existing=True) -> VideoInfo
 ```
 
 ### Behaviour
 
-1. Local path → verify it exists, probe, return. This is the offline path used by tests and the
-   documented fallback when a host is unreachable.
-2. URL → yt-dlp with:
-   * format ladder `best[height<=H][ext=mp4] / bestvideo[≤H][mp4]+bestaudio[m4a] / bestvideo[≤H]+bestaudio / best[≤H] / best`
-     (progressive MP4 first so no merge is needed; always MP4 so OpenCV can seek),
-   * `noplaylist`, retries/socket timeout from config, messages routed to our logger,
-   * a progress hook emitting `ProgressEvent(DOWNLOAD, fraction)` every 5 % (see decision log —
-     this is too coarse for very large files and is scheduled to become time-based).
-3. `reuse_existing`: if `dest_dir/video.*` exists (ignoring `.part`/`.ytdl` leftovers) it is used
-   without touching the network. The pipeline keys `dest_dir` by `sha1(source)`.
-4. The resulting file is probed; `fps/duration/frame_count` come from ffprobe, never from the
+1. Local path → verify it exists, probe, return (both methods). This is the offline path used by
+   tests and the documented fallback when a host is unreachable.
+2. `fetch_search_media` (URL) → yt-dlp with the audio-first ladder
+   `bestaudio[m4a] / bestaudio / worst[height<=search_H] / worst / worst*[acodec!=none]` —
+   the cheap download that feeds transcription/matching/verification. May have no video stream;
+   raises `UnsupportedVideoError` if it has no *audio* stream (nothing to search). Cached as
+   `dest_dir/media.*`.
+3. `fetch_video_clip` (URL) → yt-dlp `download_ranges` for `[start−pad, end+pad]` with
+   `force_keyframes_at_cuts` (re-encoded cut, so `VideoInfo.clip_start` maps source timestamps
+   exactly), format ladder `best[height<=H][ext=mp4] / bestvideo[≤H][mp4]+bestaudio[m4a] / … / best`.
+   Runs only after a verified match, so a full-quality download is only ever a few seconds long.
+   Cached as `dest_dir/clip_<start_ms>_<end_ms>.*`.
+4. Both use `noplaylist`, retries/socket timeout from config, messages routed to our logger, and a
+   **time-throttled** progress hook (one event per `progress_interval_seconds` with size, speed
+   and ETA — percent buckets read as a hang on slow hosts).
+5. `reuse_existing`: if the method's own cached file exists (ignoring `.part`/`.ytdl` leftovers)
+   it is used without touching the network. The pipeline keys `dest_dir` by `sha1(source)`.
+6. The resulting file is probed; `fps/duration/frame_count` come from ffprobe, never from the
    site's metadata (often rounded or absent, e.g. on ok.ru).
 
 ### Error mapping
@@ -74,7 +82,7 @@ ISP-level resets for ok.ru, YouTube "confirm you're not a bot"/429.
 ```python
 class AudioExtractor:
     def __init__(self, config: AudioConfig)
-    def extract(self, video: VideoInfo, dest_dir, progress=None, reuse_existing=True) -> AudioInfo
+    def extract(self, media: MediaInfo | VideoInfo, dest_dir, progress=None, reuse_existing=True) -> AudioInfo
     def extract_clip(self, source: Path, start, end, dest_path) -> AudioInfo
 ```
 
@@ -102,7 +110,7 @@ def timestamp_to_frame(t, fps) -> int          # floor(t·fps + 1e-6), clamped �
 def frame_to_timestamp(n, fps) -> float        # n / fps
 
 class FrameExtractor:
-    def __init__(self, config: FrameConfig, ffmpeg_binary="ffmpeg")
+    def __init__(self, config: FrameConfig, ffmpeg_binary="ffmpeg", ffprobe_binary="ffprobe")
     def extract(self, video: VideoInfo, timestamp, dest_path) -> FrameInfo
     def read_frame(self, video: VideoInfo, frame_number, fps=None) -> np.ndarray   # BGR
 ```
@@ -128,5 +136,8 @@ always consistent with each other (requested 1.500 s @ 25 fps → frame 37 → `
 Requests past the end clamp to the last frame with a WARNING; negative → frame 0. All failures →
 `FrameExtractionError` (including an unwritable output directory).
 
-`read_frame` is public so a V2 visual verifier can scan a range of frames with the same
-seek/fallback logic.
+`extract` accepts a *clip* (`VideoInfo.clip_start > 0`): seeking is clip-relative while the
+reported frame number and timestamp stay absolute to the source. `read_frame` is public so other
+visual stages can reuse the same seek/fallback logic on single frames (the V3 mouth check reads
+its window sequentially instead — one seek, then `cap.read()` per frame — which is the right
+pattern for dense scanning).

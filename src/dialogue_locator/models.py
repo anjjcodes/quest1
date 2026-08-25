@@ -103,11 +103,6 @@ class MediaInfo:
     duration: float | None = None  # seconds
     has_video: bool = False  # False for audio-only downloads
 
-    def to_dict(self) -> dict[str, Any]:
-        data = asdict(self)
-        data["path"] = str(self.path)
-        return data
-
 
 @dataclass(frozen=True)
 class AudioInfo:

@@ -11,7 +11,7 @@
   const els = {
     form: $("job-form"), source: $("source"), dialogue: $("dialogue"), reuse: $("reuse"),
     submit: $("submit-btn"), cancel: $("cancel-btn"), formError: $("form-error"),
-    progressCard: $("progress-card"), jobId: $("job-id"), stages: $("stages"),
+    jobId: $("job-id"), stages: $("stages"),
     bar: $("progress-bar"), message: $("progress-message"), pct: $("progress-pct"), log: $("event-log"), logCount: $("log-count"),
     resultCard: $("result-card"), resultBadge: $("result-badge"), empty: $("result-empty"),
     found: $("result-found"), notFound: $("result-notfound"), errorBox: $("result-error"), json: $("result-json"),
@@ -75,7 +75,8 @@
   els.cancel.addEventListener("click", async () => {
     if (!currentJob) return;
     els.cancel.disabled = true;
-    try { await api(`/api/jobs/${currentJob}`, { method: "DELETE" }); } catch (_) { /* may have finished */ }
+    try { await api(`/api/jobs/${currentJob}`, { method: "DELETE" }); }
+    catch (_) { els.cancel.disabled = false; /* request failed; allow another attempt */ }
   });
 
   els.copy.addEventListener("click", async () => {
@@ -86,22 +87,29 @@
   els.refresh.addEventListener("click", loadJobs);
 
   // ------------------------------------------------------------ watching a job
+  function resetPipelineIdle() {
+    els.jobId.textContent = "";
+    els.log.innerHTML = ""; els.logCount.textContent = "";
+    els.message.textContent = "Waiting for a job…"; els.pct.textContent = "";
+    els.bar.className = "bar"; els.bar.style.width = "0";
+    for (const li of els.stages.children) { li.className = ""; li.querySelector(".meta").textContent = ""; }
+  }
+
   function watch(jobId) {
     stopPolling();
     pollFailures = 0; renderedEvents = 0;
     currentJob = jobId;
     history.replaceState(null, "", `#job=${jobId}`);
     els.formError.hidden = true;
-    els.log.innerHTML = ""; els.logCount.textContent = "";
+    resetPipelineIdle();
     els.jobId.textContent = `#${jobId}`;
-    els.progressCard.hidden = false;
-    els.cancel.hidden = false; els.cancel.disabled = false;
+    els.message.textContent = "Starting…";
+    els.cancel.hidden = true; els.cancel.disabled = false;  // shown by poll() once the job is live
     els.submit.disabled = true;
     showResultSection("empty");
     els.empty.querySelector("p").textContent = "Processing… the extracted frame, timestamp and matched text will appear here.";
     document.querySelector(".raw").hidden = true;
     els.resultBadge.hidden = true;
-    for (const li of els.stages.children) { li.className = ""; li.querySelector(".meta").textContent = ""; }
     poll();
   }
   function stopPolling() { if (pollTimer) { clearTimeout(pollTimer); pollTimer = null; } }
@@ -110,9 +118,10 @@
     stopPolling();
     currentJob = null;
     history.replaceState(null, "", location.pathname);
-    els.progressCard.hidden = true;
+    resetPipelineIdle();
     els.cancel.hidden = true;
     els.submit.disabled = false;
+    els.empty.querySelector("p").textContent = "The extracted frame, timestamp and matched text will appear here.";
     showFormError(reason);
     loadJobs();
   }
@@ -129,9 +138,10 @@
       return;
     }
     renderProgress(job);
-    if (["done", "failed", "cancelled"].includes(job.status)) {
+    const finished = ["done", "failed", "cancelled"].includes(job.status);
+    els.cancel.hidden = finished;
+    if (finished) {
       renderResult(job);
-      els.cancel.hidden = true;
       els.submit.disabled = false;
       currentJob = null;
       loadJobs();
@@ -144,7 +154,8 @@
   function renderProgress(job) {
     const p = job.progress;
     const stage = p ? p.stage : "input";
-    const idx = STAGES.indexOf(stage);
+    // "matching" is folded into the transcription stage in the stepper.
+    const idx = STAGES.indexOf(stage === "matching" ? "transcription" : stage);
     const finished = ["done", "failed", "cancelled"].includes(job.status);
     const notFound = job.status === "done" && job.result && job.result.status === "not_found";
     const notOnscreen = job.status === "done" && job.result && job.result.status === "not_onscreen";
@@ -157,7 +168,9 @@
       if (pageConfig && pageConfig.stages && pageConfig.stages[s] === false) { li.classList.add("skipped"); meta.textContent = "off"; continue; }
       if (timings[s] != null) meta.textContent = fmtSecs(timings[s]);
       if (notFound && (s === "download_video" || s === "verification" || s === "frame" || s === "face_detection" || s === "mouth_movement")) { li.classList.add("skipped"); meta.textContent = "skipped"; continue; }
-      if (finished && s === "mouth_movement" && timings[s] == null) { li.classList.add("skipped"); meta.textContent = "skipped"; continue; }
+      // Only a *successful* job can mark an optional stage as skipped; on a
+      // failed/cancelled job a missing timing means the job died earlier.
+      if (job.status === "done" && s !== "input" && s !== "download" && s !== "audio" && s !== "transcription" && timings[s] == null) { li.classList.add("skipped"); meta.textContent = "skipped"; continue; }
       if (job.status === "done" || (stage === "done" && job.status === "running")) li.classList.add("done");
       else if (i < idx) li.classList.add("done");
       else if (i === idx) li.classList.add(finished ? "failed" : "active");
@@ -230,12 +243,17 @@
     if (notOnscreen) banner.textContent = r.face_present
       ? "Not an onscreen dialogue — a face is visible, but its mouth is not moving while the line is spoken."
       : "Not an onscreen dialogue — the line is heard at this timestamp, but no human face is visible in the frame.";
-    const url = `${job.frame_url}?t=${Date.now()}`;
-    $("frame-img").src = url; $("frame-link").href = url; $("frame-download").href = url;
-    $("frame-caption").textContent = r.frame ? `frame ${r.frame.frame_number} · ${r.frame.timestamp_str} · ${r.frame.width}×${r.frame.height} · ${r.frame.fps.toFixed(3)} fps` : "";
+    const hasFrame = Boolean(job.frame_url && r.frame);
+    $("frame-figure").hidden = !hasFrame;
+    if (hasFrame) {
+      const url = `${job.frame_url}?t=${Date.now()}`;
+      $("frame-img").src = url; $("frame-link").href = url; $("frame-download").href = url;
+      $("frame-download").setAttribute("download", `frame_${job.job_id}.${String(r.frame.image_path || "").endsWith(".png") ? "png" : "jpg"}`);
+      $("frame-caption").textContent = `frame ${r.frame.frame_number} · ${r.frame.timestamp_str} · ${r.frame.width}×${r.frame.height} · ${r.frame.fps.toFixed(3)} fps`;
+    }
     $("output-block").textContent = [
       `Timestamp : ${r.timestamp}`,
-      `Frame     : ${r.frame_number}`,
+      `Frame     : ${r.frame_number ?? "—"}`,
       `Text      : "${r.matched_text}"`,
     ].join("\n");
 
@@ -319,7 +337,6 @@
         `<span class="chip">fast <b>${esc(h.fast_model)}</b></span>`,
         `<span class="chip">verify <b>${esc(h.verification_enabled ? h.verify_model : "off")}</b></span>`,
         `<span class="chip">threshold <b>${esc(h.match_threshold)}</b></span>`,
-        `<span class="chip">v${esc(h.version)}</span>`,
       ].join("");
     } catch (_) { els.health.innerHTML = `<span class="chip">server unreachable</span>`; }
   }
@@ -366,8 +383,10 @@
     if (!s) { els.settingsStatus.textContent = "Could not load settings from the server."; }
     else fillSettingsForm(s);
     els.settingsOverlay.hidden = false;
+    const first = els.settingsOverlay.querySelector("input:not(:disabled), button");
+    if (first) first.focus();
   }
-  function closeSettings() { els.settingsOverlay.hidden = true; }
+  function closeSettings() { els.settingsOverlay.hidden = true; els.settingsBtn.focus(); }
 
   els.settingsBtn.addEventListener("click", openSettings);
   els.settingsClose.addEventListener("click", closeSettings);
@@ -381,6 +400,17 @@
   });
 
   els.settingsSave.addEventListener("click", () => {
+    // A blank or out-of-range number would only surface as a server 422 at
+    // submit time; catch it here, next to the field.
+    const fields = ["cfg-threshold", "cfg-face-conf", "cfg-mouth-thr", "cfg-mouth-frames", "cfg-mouth-window", "cfg-max-height"].map($);
+    for (const input of fields) {
+      if (input.value.trim() === "" || !input.checkValidity()) {
+        input.reportValidity();
+        input.focus();
+        els.settingsStatus.textContent = "Fix the highlighted value first.";
+        return;
+      }
+    }
     // Applied in this page only: sent along with each job, gone on refresh.
     pageConfig = {
       stages: {

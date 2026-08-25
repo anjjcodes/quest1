@@ -35,7 +35,8 @@ questions.
 * Downloads use a single connection; hosts that throttle per connection (e.g. ok.ru at
   ~200 KB/s) are slow. Parallel fragments / an external downloader (aria2c) are the planned fix.
 * English-only normalisation (non-ASCII letters dropped) — one regex to widen.
-* No visual "on camera" check yet — that is V2, and its seam is `verification.base.Verifier`.
+* The visual checks judge one face per frame (the most prominent); a crowd scene where a
+  background speaker mouths the line could still be judged on the foreground face.
 * Jobs are forgotten on server restart; result files persist.
 * YouTube access depends on yt-dlp keeping up with YouTube; ok.ru reachability depends on the
   network (ISP-level blocks were observed).

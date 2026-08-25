@@ -1,7 +1,8 @@
 # Module: `verification/`
 
-Second-pass checks that **confirm, refine or reject** the first-pass candidate. This package is
-also the designed extension point for V2 ("is the speaker on camera").
+Second-pass checks that **confirm, refine or reject** the first-pass candidate — audio judges of
+"is this really the line, and exactly when does it start". The visual checks (V2 face, V3 mouth)
+are pipeline stages in `vision/`, not verifiers: they judge onscreen-ness after the frame exists.
 
 ## `base.py`
 
@@ -12,13 +13,12 @@ class VerificationContext:
     audio_samples: np.ndarray          # full track, float32 16 kHz — already in memory
     audio_path: Path
     sample_rate: int = 16_000
-    video: VideoInfo | None = None     # lets visual verifiers open context.video.path
-    extra: dict = {}                   # free-form for future verifiers
     audio_duration -> float
     def slice_audio(start, end) -> (samples, actual_start, actual_end)   # clamped to the track
 
 class Verifier(ABC):
     name: str
+    def warm_up(self) -> None          # optional: load models ahead of the first job
     @abstractmethod
     def verify(self, candidate: MatchCandidate, context) -> VerificationOutcome
 ```
@@ -39,10 +39,12 @@ class AsrVerifier(Verifier):            # name = "asr_large_model"
 
 Steps:
 
+0. Skip entirely (`SKIPPED`) when `enabled=False`, or when the first-pass score already meets
+   `skip_above_score` (default 90): verification exists to check uncertain matches.
 1. `context.slice_audio(candidate.start − W, candidate.end + W)` with `W = search_window_seconds`
-   (20 s) — a numpy slice, no ffmpeg, no disk.
-2. `transcriber.transcribe_all(clip, offset=clip_start)` with the `verify_model` (default `medium`),
-   so words carry absolute times.
+   (12 s) — a numpy slice, no ffmpeg, no disk.
+2. `transcriber.transcribe_all(clip, offset=clip_start)` with the `verify_model` (default `small`,
+   always with the VAD off — decision #24), so words carry absolute times.
 3. `best_match(words, dialogue, matching_config)` — the strongest window in the clip.
 4. Decision:
    * `best.score ≥ candidate.score − max_score_drop` (5) → **CONFIRMED**, `refined=best`

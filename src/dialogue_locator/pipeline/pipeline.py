@@ -23,18 +23,21 @@ Stages, in order (each maps to a :class:`PipelineStage`)::
 The search stages run on a cheap audio-first download; full-quality video is
 downloaded only as a short clip around the verified match (so a NOT_FOUND job
 never pays for a video download, and a FOUND job pays only for a few seconds).
-Verification is audio-only in V1, so it runs before any video exists; a V2
-visual verifier should fetch its own clip on demand (``fetch_video_clip`` is
-cheap) rather than expect ``context.video``.
+Verification is audio-only, so it runs before any video exists; the visual
+checks (V2/V3) run afterwards, on the clip and the extracted frame.
 
 The pipeline knows nothing about FastAPI or HTML: it takes a
 :class:`PipelineRequest`, reports through a :data:`ProgressCallback`, and
 returns a :class:`LocalizationResult`. Every stage component can be injected
 (constructor keyword arguments) so the orchestration is testable with fakes.
 
-Extension point for V2: pass an extra :class:`Verifier` in ``verifiers`` (or
-append to ``build_default_verifiers``); it receives the candidate as refined by
-the ASR verifier and may refine it further (e.g. to the first on-camera frame).
+Extension points:
+
+* Another *audio* confirmation check (e.g. a second ASR engine): pass an extra
+  :class:`Verifier` in ``verifiers`` or append to ``build_default_verifiers``.
+* Another *visual* validation stage (V4+): follow the V2/V3 pattern - a small
+  analyser class in ``vision/``, a ``_stage_*`` method in :class:`_Run` that
+  gates the verdict and fails open with a warning, and a config toggle.
 """
 
 from __future__ import annotations
@@ -50,6 +53,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+import numpy as np
+
 from dialogue_locator.config import Settings
 from dialogue_locator.exceptions import (
     DialogueLocatorError,
@@ -57,13 +62,15 @@ from dialogue_locator.exceptions import (
     MouthMovementError,
     PipelineCancelledError,
 )
-from dialogue_locator.matching.matcher import StreamingMatcher, TargetDialogue
+from dialogue_locator.matching.matcher import StreamingMatcher
 from dialogue_locator.media.audio import AudioExtractor
 from dialogue_locator.media.downloader import VideoDownloader, is_url, validate_url
 from dialogue_locator.media.frames import FrameExtractor
 from dialogue_locator.models import (
+    AudioInfo,
     LocalizationResult,
     MatchCandidate,
+    MediaInfo,
     PipelineStage,
     ProgressCallback,
     ProgressEvent,
@@ -101,7 +108,7 @@ class PipelineRequest:
 
 
 def build_default_verifiers(settings: Settings, verify_transcriber: Transcriber | None = None) -> list[Verifier]:
-    """The V1 verifier chain. V2 appends its visual verifier here."""
+    """The default verifier chain: one large-model ASR check of the candidate."""
     if not settings.verification.enabled:
         return []
     # The verifier re-hears a short window already known to contain speech, so the
@@ -149,7 +156,9 @@ class DialoguePipeline:
         else:
             self.retry_transcriber = None
         self.verifiers = build_default_verifiers(settings) if verifiers is None else verifiers
-        self.frame_extractor = frame_extractor or FrameExtractor(settings.frame, settings.audio.ffmpeg_binary)
+        self.frame_extractor = frame_extractor or FrameExtractor(
+            settings.frame, settings.audio.ffmpeg_binary, settings.audio.ffprobe_binary
+        )
         self.face_detector = face_detector or FaceDetector(settings.face_detection)
         self.mouth_analyzer = mouth_analyzer or MouthMovementAnalyzer(settings.mouth_movement)
 
@@ -159,9 +168,7 @@ class DialoguePipeline:
         t0 = time.perf_counter()
         self.fast_transcriber.warm_up()
         for verifier in self.verifiers:
-            transcriber = getattr(verifier, "_transcriber", None)
-            if isinstance(transcriber, Transcriber):
-                transcriber.warm_up()
+            verifier.warm_up()
         logger.info("Models ready in %.1fs", time.perf_counter() - t0)
 
     # ------------------------------------------------------------------ #
@@ -193,6 +200,7 @@ class _Run:
         self.settings = pipeline.settings
         self.timings: dict[str, float] = {}
         self.warnings: list[str] = []
+        self.transcribed_seconds = 0.0  # how far into the audio the search got
         self.stage = PipelineStage.INPUT
         self.work_dir = self.settings.storage.work_dir / request.source_key
         self.output_dir = self.settings.storage.output_dir / request.job_id
@@ -229,23 +237,93 @@ class _Run:
         return result
 
     def _execute(self) -> LocalizationResult:
-        # ---- input --------------------------------------------------------
+        """One stage per line; each ``_stage_*`` method owns its timing and events."""
+        matcher = self._stage_input()
+        media = self._stage_download(self.req.source)
+        audio, samples = self._stage_audio(media)
+        match, matcher = self._stage_search(samples, matcher)
+
+        result = LocalizationResult(
+            status=ResultStatus.FOUND if match else ResultStatus.NOT_FOUND,
+            dialogue=matcher.target.raw,
+            source_url=self.req.source,
+            video=None,  # full-quality video is fetched only after a match
+            first_pass=match,
+            match=match,
+            near_misses=matcher.near_misses,
+            warnings=self.warnings,
+            stage_timings=self.timings,
+            transcribed_seconds=self.transcribed_seconds,
+        )
+        if match is None:
+            self._emit(
+                PipelineStage.MATCHING,
+                f"Dialogue not found (best score {matcher.best_score:.1f})",
+                1.0,
+                {"best_score": matcher.best_score, "near_misses": len(matcher.near_misses)},
+            )
+            return result
+        self._emit(
+            PipelineStage.MATCHING,
+            f"Match at {match.timestamp} (score {match.score:.1f})",
+            1.0,
+            {"timestamp": match.timestamp, "score": match.score},
+        )
+        self._check_cancel()
+
+        self._stage_verification(result, samples, audio)
+        self._check_cancel()
+
+        # A local audio-only source can be searched but has no frames to offer;
+        # a URL always gets the clip (its search media may be audio-only even
+        # though the source has video).
+        if is_url(self.req.source) or media.has_video:
+            video = self._stage_download_video(result)
+            self._check_cancel()
+            self._stage_frame(result, video)
+            self._check_cancel()
+            # The visual checks build on each other: no face check, no mouth check.
+            if not self.settings.face_detection.enabled:
+                logger.info("Face detection disabled; skipping visual checks")
+                return result
+            self._stage_face_detection(result)
+            if (
+                self.settings.mouth_movement.enabled
+                and result.face_detection is not None
+                and result.face_detection.face_present
+            ):
+                self._check_cancel()
+                self._stage_mouth_movement(result, video)
+        else:
+            warning = "Source has no video stream; returning the timestamp without a frame."
+            self.warnings.append(warning)
+            logger.warning(warning)
+        return result
+
+    # ------------------------------------------------------------------ #
+    # Stages (in pipeline order)
+    # ------------------------------------------------------------------ #
+    def _stage_input(self) -> StreamingMatcher:
+        """Validate dialogue and URL; fails before any I/O."""
         self._begin(PipelineStage.INPUT, "Validating input")
         matcher = StreamingMatcher(self.req.dialogue, self.settings.matching)  # InvalidDialogueError
         if is_url(self.req.source):
             validate_url(self.req.source)  # InvalidURLError
-        target: TargetDialogue = matcher.target
         self._end(PipelineStage.INPUT)
+        return matcher
 
-        # ---- download (cheap search media) --------------------------------
+    def _stage_download(self, source: str) -> MediaInfo:
+        """Fetch the cheap search media (audio-only when the host offers it)."""
         self._begin(PipelineStage.DOWNLOAD, "Fetching audio for search")
         media = self.p.downloader.fetch_search_media(
-            self.req.source, self.work_dir, progress=self.progress, reuse_existing=self.req.reuse_cached_media
+            source, self.work_dir, progress=self.progress, reuse_existing=self.req.reuse_cached_media
         )
         self._end(PipelineStage.DOWNLOAD)
         self._check_cancel()
+        return media
 
-        # ---- audio --------------------------------------------------------
+    def _stage_audio(self, media: MediaInfo) -> tuple[AudioInfo, np.ndarray]:
+        """Extract 16 kHz mono PCM and load it into memory (shared with the verifier)."""
         self._begin(PipelineStage.AUDIO, "Extracting audio")
         audio = self.p.audio_extractor.extract(
             media, self.work_dir, progress=self.progress, reuse_existing=self.req.reuse_cached_media
@@ -253,8 +331,12 @@ class _Run:
         samples = load_pcm(audio.path, self.settings.audio.sample_rate)
         self._end(PipelineStage.AUDIO)
         self._check_cancel()
+        return audio, samples
 
-        # ---- transcription + matching (streamed) --------------------------
+    def _stage_search(
+        self, samples: np.ndarray, matcher: StreamingMatcher
+    ) -> tuple[MatchCandidate | None, StreamingMatcher]:
+        """Stream the fast transcriber through the matcher; VAD-off retry on a miss."""
         self._begin(PipelineStage.TRANSCRIPTION, "Loading speech model")
         self.p.fast_transcriber.warm_up()
         self._emit(PipelineStage.TRANSCRIPTION, "Listening for the dialogue", 0.0, {})
@@ -285,46 +367,27 @@ class _Run:
                 matcher = retry_matcher  # report near misses from the better pass
         self._end(PipelineStage.TRANSCRIPTION)
         self.timings[PipelineStage.MATCHING.value] = 0.0  # folded into transcription
+        self.transcribed_seconds = last_word_end
+        return match, matcher
 
-        result = LocalizationResult(
-            status=ResultStatus.FOUND if match else ResultStatus.NOT_FOUND,
-            dialogue=target.raw,
-            source_url=self.req.source,
-            video=None,  # full-quality video is fetched only after a match
-            first_pass=match,
-            match=match,
-            near_misses=matcher.near_misses,
-            warnings=self.warnings,
-            stage_timings=self.timings,
-            transcribed_seconds=last_word_end,
-        )
-        if match is None:
-            self._emit(
-                PipelineStage.MATCHING,
-                f"Dialogue not found (best score {matcher.best_score:.1f})",
-                1.0,
-                {"best_score": matcher.best_score, "near_misses": len(matcher.near_misses)},
-            )
-            return result
+    def _stage_verification(
+        self, result: LocalizationResult, samples: np.ndarray, audio: AudioInfo
+    ) -> None:
+        """Run the verifier chain (audio-only; the video clip does not exist yet).
 
-        self._emit(
-            PipelineStage.MATCHING,
-            f"Match at {match.timestamp} (score {match.score:.1f})",
-            1.0,
-            {"timestamp": match.timestamp, "score": match.score},
-        )
-        self._check_cancel()
-
-        # ---- verification (audio-only; the video clip does not exist yet) --
+        Each verifier sees the candidate as refined by the previous ones; a
+        rejection or failure keeps the current timestamp and adds a warning.
+        Sets ``result.match`` to the final (possibly refined) candidate.
+        """
         self._begin(PipelineStage.VERIFICATION, "Verifying with larger model")
         context = VerificationContext(
-            dialogue=target.raw,
+            dialogue=result.dialogue,
             audio_samples=samples,
             audio_path=audio.path,
             sample_rate=self.settings.audio.sample_rate,
-            video=None,
         )
-        current = match
+        assert result.match is not None
+        current = result.match
         for verifier in self.p.verifiers:
             outcome = verifier.verify(current, context)
             result.verifications.append(outcome)
@@ -344,117 +407,110 @@ class _Run:
             self._check_cancel()
         result.match = current
         self._end(PipelineStage.VERIFICATION)
-        self._check_cancel()
 
-        # ---- download (video clip around the verified match) --------------
-        # Only now is the timestamp final, so only these few seconds of full-
-        # quality video are downloaded. A local audio-only source can be
-        # searched but has no frames to offer; a URL always gets the clip (its
-        # search media may be audio-only even though the source has video).
-        if is_url(self.req.source) or media.has_video:
-            self._begin(PipelineStage.DOWNLOAD_VIDEO, "Fetching video clip")
-            video: VideoInfo = self.p.downloader.fetch_video_clip(
-                self.req.source,
-                current.start,
-                current.end,
-                self.work_dir,
-                progress=self._retag(PipelineStage.DOWNLOAD_VIDEO),
-                reuse_existing=self.req.reuse_cached_media,
-            )
-            self._end(PipelineStage.DOWNLOAD_VIDEO)
-            result.video = video
-            self._check_cancel()
+    def _stage_download_video(self, result: LocalizationResult) -> VideoInfo:
+        """Fetch a few seconds of full-quality video around the verified match.
 
-            # ---- frame ----------------------------------------------------
-            self._begin(PipelineStage.FRAME, "Extracting frame")
-            self.output_dir.mkdir(parents=True, exist_ok=True)
-            result.frame = self.p.frame_extractor.extract(video, current.start, self.output_dir / FRAME_FILENAME)
-            self._end(PipelineStage.FRAME)
-            self._check_cancel()
+        Only now is the timestamp final, so a NOT_FOUND job never pays for a
+        video download and a FOUND job pays only for a short clip.
+        """
+        assert result.match is not None
+        self._begin(PipelineStage.DOWNLOAD_VIDEO, "Fetching video clip")
+        video = self.p.downloader.fetch_video_clip(
+            self.req.source,
+            result.match.start,
+            result.match.end,
+            self.work_dir,
+            progress=self._retag(PipelineStage.DOWNLOAD_VIDEO),
+            reuse_existing=self.req.reuse_cached_media,
+        )
+        self._end(PipelineStage.DOWNLOAD_VIDEO)
+        result.video = video
+        return video
 
-            # ---- face detection (V2) --------------------------------------
-            # Runs on the saved output frame and gates the verdict: a match with
-            # no face on camera is reported as NOT_ONSCREEN (details are kept so
-            # the caller can inspect what was found). Fails open: if the check
-            # itself cannot run, the localisation stands, with a warning.
-            # Disabling it (config/settings API) skips it and, because the mouth
-            # check requires a confirmed face, the mouth check with it.
-            if not self.settings.face_detection.enabled:
-                logger.info("Face detection disabled; skipping visual checks")
-                return result
-            self._begin(PipelineStage.FACE_DETECTION, "Checking for a face in the frame")
-            try:
-                result.face_detection = self.p.face_detector.detect_file(result.frame.image_path)
-            except FaceDetectionError as exc:
-                warning = f"Face check failed: {exc.message}"
-                self.warnings.append(warning)
-                logger.warning("Face detection warning: %s", warning)
-                self._emit(PipelineStage.FACE_DETECTION, warning, 1.0, {"error": exc.message})
-            else:
-                detected = result.face_detection
-                if detected.face_present:
-                    message = f"{len(detected.faces)} face(s) visible in the frame"
-                else:
-                    result.status = ResultStatus.NOT_ONSCREEN
-                    message = "No face visible - not an onscreen dialogue"
-                    logger.info("No face in frame %s; verdict: not_onscreen", result.frame.image_path.name)
-                self._emit(PipelineStage.FACE_DETECTION, message, 1.0, detected.to_dict())
-            self._end(PipelineStage.FACE_DETECTION)
+    def _stage_frame(self, result: LocalizationResult, video: VideoInfo) -> None:
+        """Save the frame at the verified start time into the job's output dir."""
+        assert result.match is not None
+        self._begin(PipelineStage.FRAME, "Extracting frame")
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+        result.frame = self.p.frame_extractor.extract(
+            video, result.match.start, self.output_dir / FRAME_FILENAME
+        )
+        self._end(PipelineStage.FRAME)
 
-            # ---- mouth movement (V3) --------------------------------------
-            # Only once V2 confirmed a face: track the lips across the clip's
-            # frames for the matched window. A face whose mouth never moves is
-            # not speaking the line (reaction shot, voice-over) -> NOT_ONSCREEN.
-            # Indeterminate (too few landmark frames) or a crashed analyser
-            # fails open with a warning, like the face check.
-            if (
-                self.settings.mouth_movement.enabled
-                and result.face_detection is not None
-                and result.face_detection.face_present
-            ):
-                self._check_cancel()
-                self._begin(PipelineStage.MOUTH_MOVEMENT, "Checking for mouth movement")
-                try:
-                    result.mouth_movement = self.p.mouth_analyzer.analyze(
-                        video, current.start, current.end
-                    )
-                except MouthMovementError as exc:
-                    warning = f"Mouth check failed: {exc.message}"
-                    self.warnings.append(warning)
-                    logger.warning("Mouth movement warning: %s", warning)
-                    self._emit(PipelineStage.MOUTH_MOVEMENT, warning, 1.0, {"error": exc.message})
-                else:
-                    movement = result.mouth_movement
-                    if movement.moving is True:
-                        message = f"Mouth movement detected (score {movement.movement_score:.3f})"
-                    elif movement.moving is False:
-                        result.status = ResultStatus.NOT_ONSCREEN
-                        message = "Face visible but mouth not moving - not an onscreen dialogue"
-                        logger.info(
-                            "Mouth still during %s-%s (score %.4f); verdict: not_onscreen",
-                            format_timestamp(movement.window_start),
-                            format_timestamp(movement.window_end),
-                            movement.movement_score or 0.0,
-                        )
-                    else:
-                        warning = (
-                            "Mouth movement could not be judged: face landmarks in only "
-                            f"{movement.frames_with_face} of {movement.frames_analyzed} frames."
-                        )
-                        self.warnings.append(warning)
-                        logger.warning("Mouth movement warning: %s", warning)
-                        message = warning
-                    self._emit(PipelineStage.MOUTH_MOVEMENT, message, 1.0, movement.to_dict())
-                self._end(PipelineStage.MOUTH_MOVEMENT)
-        else:
-            warning = "Source has no video stream; returning the timestamp without a frame."
+    def _stage_face_detection(self, result: LocalizationResult) -> None:
+        """V2: check the saved frame for a face and gate the verdict.
+
+        A match with no face on camera is reported as NOT_ONSCREEN (details are
+        kept so the caller can inspect what was found). Fails open: if the
+        check itself cannot run, the localisation stands, with a warning.
+        """
+        assert result.frame is not None
+        self._begin(PipelineStage.FACE_DETECTION, "Checking for a face in the frame")
+        try:
+            result.face_detection = self.p.face_detector.detect_file(result.frame.image_path)
+        except FaceDetectionError as exc:
+            warning = f"Face check failed: {exc.message}"
             self.warnings.append(warning)
-            logger.warning(warning)
-        return result
+            logger.warning("Face detection warning: %s", warning)
+            self._emit(PipelineStage.FACE_DETECTION, warning, 1.0, {"error": exc.message})
+        else:
+            detected = result.face_detection
+            if detected.face_present:
+                message = f"{len(detected.faces)} face(s) visible in the frame"
+            else:
+                result.status = ResultStatus.NOT_ONSCREEN
+                message = "No face visible - not an onscreen dialogue"
+                logger.info("No face in frame %s; verdict: not_onscreen", result.frame.image_path.name)
+            self._emit(PipelineStage.FACE_DETECTION, message, 1.0, detected.to_dict())
+        self._end(PipelineStage.FACE_DETECTION)
+
+    def _stage_mouth_movement(self, result: LocalizationResult, video: VideoInfo) -> None:
+        """V3: track the lips across the clip's frames for the matched window.
+
+        Only runs once V2 confirmed a face. A face whose mouth never moves is
+        not speaking the line (reaction shot, voice-over) -> NOT_ONSCREEN.
+        Indeterminate (too few landmark frames) or a crashed analyser fails
+        open with a warning, like the face check.
+        """
+        assert result.match is not None
+        self._begin(PipelineStage.MOUTH_MOVEMENT, "Checking for mouth movement")
+        try:
+            result.mouth_movement = self.p.mouth_analyzer.analyze(
+                video, result.match.start, result.match.end
+            )
+        except MouthMovementError as exc:
+            warning = f"Mouth check failed: {exc.message}"
+            self.warnings.append(warning)
+            logger.warning("Mouth movement warning: %s", warning)
+            self._emit(PipelineStage.MOUTH_MOVEMENT, warning, 1.0, {"error": exc.message})
+        else:
+            movement = result.mouth_movement
+            if movement.moving is True:
+                message = f"Mouth movement detected (score {movement.movement_score:.3f})"
+            elif movement.moving is False:
+                result.status = ResultStatus.NOT_ONSCREEN
+                message = "Face visible but mouth not moving - not an onscreen dialogue"
+                logger.info(
+                    "Mouth still during %s-%s (score %.4f); verdict: not_onscreen",
+                    format_timestamp(movement.window_start),
+                    format_timestamp(movement.window_end),
+                    movement.movement_score or 0.0,
+                )
+            else:
+                warning = (
+                    "Mouth movement could not be judged: face landmarks in only "
+                    f"{movement.frames_with_face} of {movement.frames_analyzed} frames."
+                )
+                self.warnings.append(warning)
+                logger.warning("Mouth movement warning: %s", warning)
+                message = warning
+            self._emit(PipelineStage.MOUTH_MOVEMENT, message, 1.0, movement.to_dict())
+        self._end(PipelineStage.MOUTH_MOVEMENT)
 
     # ------------------------------------------------------------------ #
     def _scan(
-        self, transcriber: Transcriber, samples: Any, matcher: StreamingMatcher
+        self, transcriber: Transcriber, samples: np.ndarray, matcher: StreamingMatcher
     ) -> tuple[MatchCandidate | None, float]:
         """Stream ``transcriber`` over ``samples`` through ``matcher``.
 

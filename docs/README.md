@@ -8,7 +8,7 @@ built that way, and *how* to change it safely.
 |---|---|---|
 | 1 | [Overview](01-overview.md) | understand the problem, the approach, and how the PS evaluation questions are answered |
 | 2 | [Architecture](02-architecture.md) | see how the stages fit together, the data flow, and the extension points |
-| 3 | [Getting started](03-getting-started.md) | install, run the CLI / server / tests on a fresh machine |
+| 3 | [Getting started](03-getting-started.md) | install, run the CLI / server / tests, use the modules on their own |
 | 4 | [Configuration](04-configuration.md) | change models, thresholds, paths, ports — every knob with its default |
 | 5 | Modules | understand one package in depth |
 |   | [config, exceptions, logging](modules/config-exceptions-logging.md) | settings object, error hierarchy, log setup |
@@ -17,12 +17,13 @@ built that way, and *how* to change it safely.
 |   | [transcription](modules/transcription.md) | the `Transcriber` contract and the Faster-Whisper implementation |
 |   | [matching](modules/matching.md) | normalisation and the streaming sliding-window matcher |
 |   | [verification](modules/verification.md) | the `Verifier` contract and the large-model ASR verifier |
+|   | [vision](modules/vision.md) | V2 face presence and V3 mouth movement |
 |   | [pipeline & CLI](modules/pipeline-and-cli.md) | orchestration, timings, cancellation, the command line |
 |   | [api](modules/api.md) | FastAPI app, job manager, routes, schemas |
 |   | [web UI](modules/web-ui.md) | the HTML/CSS/JS front end |
 | 6 | [Testing](06-testing.md) | run, read and extend the test suite |
 | 7 | [Operations & troubleshooting](07-operations-troubleshooting.md) | disk layout, caching, performance, network / site errors |
-| 8 | [Extending](08-extending.md) | add the V2 visual verifier, swap the ASR engine, add a stage |
+| 8 | [Extending](08-extending.md) | add another visual stage (V4+), swap the ASR engine, add a verifier |
 | 9 | [Decision log](09-decision-log.md) | the non-obvious choices and the evidence behind them |
 
 Conventions used in these docs:
@@ -31,4 +32,5 @@ Conventions used in these docs:
 * `Settings.<section>.<field>` refers to the configuration object; `DL_<SECTION>__<FIELD>` is the
   matching environment variable.
 * "Stage" means one step of the pipeline (`input, download, audio, transcription, matching,
-  verification, frame, done`) — the same names appear in logs, progress events, errors and the UI.
+  verification, download_video, frame, face_detection, mouth_movement, done`) — the same names
+  appear in logs, progress events, errors and the UI.

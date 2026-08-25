@@ -11,9 +11,9 @@ Two fetches are offered:
   transcription: audio-only when the host offers it, else the lowest video
   rendition under ``search_max_height``. Returns a
   :class:`~dialogue_locator.models.MediaInfo` (which may have no video stream).
-* :meth:`VideoDownloader.fetch` - the full-quality video (capped at
-  ``max_height``), needed only for frame extraction once a match is confirmed.
-  Returns a :class:`~dialogue_locator.models.VideoInfo`.
+* :meth:`VideoDownloader.fetch_video_clip` - a few seconds of full-quality
+  video (capped at ``max_height``) around the verified match, needed only for
+  frame extraction. Returns a :class:`~dialogue_locator.models.VideoInfo`.
 
 For a local file both methods resolve to the same file. Media properties
 (fps / duration / frame count) come from ffprobe rather than from the site's
@@ -35,7 +35,13 @@ from yt_dlp.utils import ExtractorError, UnsupportedError, download_range_func
 from dialogue_locator.config import DownloadConfig
 from dialogue_locator.exceptions import DownloadError, InvalidURLError, UnsupportedVideoError
 from dialogue_locator.media.probe import probe_media
-from dialogue_locator.models import MediaInfo, PipelineStage, ProgressCallback, ProgressEvent, VideoInfo
+from dialogue_locator.models import (
+    MediaInfo,
+    PipelineStage,
+    ProgressCallback,
+    ProgressEvent,
+    VideoInfo,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -52,8 +58,7 @@ def _format_eta(seconds: float) -> str:
     return f"{h}:{m:02d}:{sec:02d}" if h else f"{m}:{sec:02d}"
 
 _ALLOWED_SCHEMES = ("http", "https")
-_VIDEO_STEM = "video"  # full-quality fetch, cached per source
-_MEDIA_STEM = "media"  # cheap search fetch, cached separately (different format)
+_MEDIA_STEM = "media"  # cheap search fetch, cached separately from video clips
 
 
 def is_url(source: str) -> bool:
@@ -96,26 +101,6 @@ class VideoDownloader:
     # ------------------------------------------------------------------ #
     # Public API
     # ------------------------------------------------------------------ #
-    def fetch(
-        self,
-        source: str,
-        dest_dir: Path,
-        progress: ProgressCallback | None = None,
-        reuse_existing: bool = True,
-    ) -> VideoInfo:
-        """Obtain the full-quality video for ``source`` and return its :class:`VideoInfo`.
-
-        Args:
-            source: http(s) URL or local file path.
-            dest_dir: directory to download into (created if missing).
-            progress: optional callback for download progress events.
-            reuse_existing: if a previous download exists in ``dest_dir``, use it
-                instead of re-downloading (speeds up repeated runs on one video).
-        """
-        path, title = self._obtain(source, dest_dir, progress, reuse_existing,
-                                   fmt=self._video_format(), stem=_VIDEO_STEM, label="video")
-        return self._describe(path, source, title)
-
     def fetch_search_media(
         self,
         source: str,
@@ -125,10 +110,11 @@ class VideoDownloader:
     ) -> MediaInfo:
         """Obtain the cheap search-pass media for ``source`` (audio-only if possible).
 
-        Same arguments as :meth:`fetch`. For URLs this downloads the best
-        audio-only stream, falling back to the lowest video rendition under
-        ``search_max_height`` on hosts without separate audio streams. For a
-        local file it resolves the file itself. Raises
+        For URLs this downloads the best audio-only stream, falling back to
+        the lowest video rendition under ``search_max_height`` on hosts
+        without separate audio streams. For a local file it resolves the file
+        itself. ``reuse_existing`` reuses a previous download in ``dest_dir``
+        (speeds up repeated runs on one video). Raises
         ``UnsupportedVideoError`` if the result has no audio stream, since
         there is then no dialogue to search.
         """
@@ -147,7 +133,7 @@ class VideoDownloader:
     ) -> VideoInfo:
         """Download only ``[start, end]`` (padded by ``clip_padding_seconds``)
         of ``source`` at full quality, for frame extraction around a verified
-        match. Far cheaper than :meth:`fetch` on long videos.
+        match. Far cheaper than fetching the whole video at full quality.
 
         The cut is re-encoded to start exactly at the padded start, so the
         returned ``VideoInfo.clip_start`` maps source timestamps precisely.
@@ -171,12 +157,12 @@ class VideoDownloader:
         clip_start = max(0.0, float(start) - pad)
         clip_end = float(end) + pad
         stem = f"clip_{int(clip_start * 1000)}_{int(clip_end * 1000)}"
-        path = self._download(
+        path, title = self._download(
             validate_url(source), dest_dir, progress, reuse_existing,
             fmt=self._video_format(), stem=stem, label="video clip",
             section=(clip_start, clip_end),
         )
-        return self._describe(path, source, self._last_title, clip_start=clip_start)
+        return self._describe(path, source, title, clip_start=clip_start)
 
     def _obtain(
         self,
@@ -195,9 +181,8 @@ class VideoDownloader:
             raise InvalidURLError("Video source is empty.")
 
         if is_url(source):
-            path = self._download(validate_url(source), dest_dir, progress, reuse_existing,
+            return self._download(validate_url(source), dest_dir, progress, reuse_existing,
                                   fmt=fmt, stem=stem, label=label)
-            return path, self._last_title
         path = self._resolve_local(source)
         return path, path.stem
 
@@ -293,13 +278,14 @@ class VideoDownloader:
         stem: str,
         label: str,
         section: tuple[float, float] | None = None,
-    ) -> Path:
+    ) -> tuple[Path, str | None]:
+        """Download ``url`` into ``dest_dir`` and return ``(path, title)``."""
         dest_dir.mkdir(parents=True, exist_ok=True)
-        self._last_title = None
+        title: str | None = None
 
         if reuse_existing and (existing := self._existing_download(dest_dir, stem)):
             logger.info("Reusing previously downloaded %s: %s", label, existing)
-            return existing
+            return existing, None
 
         logger.info("Downloading %s (%s, format %r) -> %s", url, label, fmt, dest_dir)
         self._emit(progress, f"Starting {label} download", 0.0, {"url": url, "kind": label})
@@ -315,7 +301,7 @@ class VideoDownloader:
                     if not entries:
                         raise DownloadError("URL resolved to an empty playlist.", details={"url": url})
                     info = entries[0]
-                self._last_title = info.get("title")
+                title = info.get("title")
                 path = self._resolve_downloaded_path(ydl, info)
         except UnsupportedError as exc:
             logger.error("Unsupported URL %s: %s", url, exc)
@@ -345,7 +331,7 @@ class VideoDownloader:
         size_mb = path.stat().st_size / 1_000_000
         logger.info("Download complete: %s (%.1f MB)", path.name, size_mb)
         self._emit(progress, "Download complete", 1.0, {"path": str(path), "size_mb": round(size_mb, 1)})
-        return path
+        return path, title
 
     @staticmethod
     def _resolve_downloaded_path(ydl: yt_dlp.YoutubeDL, info: dict[str, Any]) -> Path:

@@ -68,7 +68,7 @@
         </form>
       </section>
 
-      <section class="panel" id="progress-card" hidden>
+      <section class="panel" id="progress-card">
         <header class="panel-head">
           <h2><span class="step-no">2</span> Pipeline</h2>
           <span id="job-id" class="job-tag"></span>
@@ -88,8 +88,8 @@
 
         <div class="progress-wrap">
           <div class="progress"><div id="progress-bar" class="bar"></div></div>
-          <div class="progress-text">
-            <span id="progress-message">Queued…</span>
+          <div class="progress-text" aria-live="polite">
+            <span id="progress-message">Waiting for a job…</span>
             <span id="progress-pct" class="pct"></span>
           </div>
         </div>
@@ -120,7 +120,7 @@
 
         <div id="result-found" hidden>
           <p id="r-onscreen" class="alert alert-warn" hidden></p>
-          <figure class="frame">
+          <figure class="frame" id="frame-figure">
             <a id="frame-link" href="#" target="_blank" rel="noopener" title="Open full-size frame">
               <img id="frame-img" alt="Extracted video frame">
             </a>
@@ -233,10 +233,6 @@
       </footer>
     </div>
   </div>
-
-  <footer class="app-footer">
-    Dialogue Locator · streaming Faster-Whisper + RapidFuzz + large-model verification · results are also written to <code>data/output/&lt;job&gt;/</code>
-  </footer>
 
   <script src="/static/app.js"></script>
 </body>

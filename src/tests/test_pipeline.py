@@ -7,7 +7,6 @@ import logging
 from collections.abc import Iterator
 from pathlib import Path
 
-import numpy as np
 import pytest
 
 from dialogue_locator.config import Settings
@@ -222,7 +221,7 @@ def test_found_end_to_end(settings, sample_video, tmp_path):
     assert PipelineStage.MATCHING in stages and PipelineStage.FRAME in stages
     assert result.video.source_url == "https://example.com/v"
     # verification is audio-only and runs before any video is downloaded ...
-    assert verifier.contexts[0].video is None
+    assert stages.index(PipelineStage.VERIFICATION) < stages.index(PipelineStage.DOWNLOAD_VIDEO)
     # ... so the clip is requested around the *verified* (refined) timestamps
     assert dl.video_calls == 1
     assert dl.clip_ranges[0][0] == pytest.approx(0.58)

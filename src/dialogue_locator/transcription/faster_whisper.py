@@ -27,7 +27,13 @@ import numpy as np
 
 from dialogue_locator.config import WhisperConfig
 from dialogue_locator.exceptions import TranscriptionError
-from dialogue_locator.models import PipelineStage, ProgressCallback, ProgressEvent, Word, format_timestamp
+from dialogue_locator.models import (
+    PipelineStage,
+    ProgressCallback,
+    ProgressEvent,
+    Word,
+    format_timestamp,
+)
 from dialogue_locator.transcription.base import Transcriber, pcm_duration
 
 logger = logging.getLogger(__name__)

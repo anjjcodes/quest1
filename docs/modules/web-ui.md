@@ -11,7 +11,7 @@ web/static/app.js           vanilla JS client — talks only to /api/*
 ## Layout
 
 ```
-┌ header: brand · config chips (fast / verify / threshold / version) · API docs ┐
+┌ header: brand · config chips (fast / verify / threshold) · API docs · settings ┐
 ├───────────────────────────┬──────────────────────────────────────────────────┤
 │ 1 Input                   │ 3 Result                                          │
 │   source, dialogue, reuse │   empty ▸ found ▸ not found ▸ error               │

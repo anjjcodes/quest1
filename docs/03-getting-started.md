@@ -42,7 +42,7 @@ dialogue-locator path/to/video.mp4 "some spoken line" --json      # local file, 
 dialogue-locator <url> "<line>" --fast-model small --no-verify -v # overrides, debug logs
 ```
 
-Output (exit code 0 found / 2 not found / 1 error):
+Output (exit code 0 found / 2 not found / 3 heard but not onscreen / 1 error):
 
 ```
 Timestamp : 00:09:13.187
@@ -73,6 +73,88 @@ curl localhost:8000/api/jobs/<job_id>            # poll
 curl -o frame.jpg localhost:8000/api/jobs/<job_id>/frame
 ```
 
+## Run — from Python
+
+The pipeline is a plain class, so it can be driven from any script or notebook:
+
+```python
+from dialogue_locator.config import get_settings
+from dialogue_locator.pipeline import DialoguePipeline, PipelineRequest
+
+pipeline = DialoguePipeline(get_settings())
+result = pipeline.run(PipelineRequest(source="video.mp4", dialogue="my mind rebels at stagnation"))
+print(result.timestamp, result.frame_number, result.matched_text)
+```
+
+`result` is a `LocalizationResult` (see [models](modules/models.md)); `result.to_dict()` is the
+same record the CLI writes to `result.json` and the API returns.
+
+## Using the modules on their own
+
+Every stage is a plain class that takes its config in the constructor, so each one is usable
+by itself, without the pipeline. A few examples:
+
+Download just the audio of any video:
+
+```python
+from pathlib import Path
+
+from dialogue_locator.config import DownloadConfig
+from dialogue_locator.media.downloader import VideoDownloader
+
+media = VideoDownloader(DownloadConfig()).fetch_search_media("https://...", Path("tmp"))
+```
+
+Stream a transcription with word timestamps from any 16 kHz WAV:
+
+```python
+from dialogue_locator.config import WhisperConfig
+from dialogue_locator.transcription.faster_whisper import FasterWhisperTranscriber
+
+for word in FasterWhisperTranscriber("base", WhisperConfig()).transcribe(Path("audio.wav")):
+    print(word.text, word.start)
+```
+
+Search any word stream for a phrase:
+
+```python
+from dialogue_locator.config import MatchingConfig
+from dialogue_locator.matching.matcher import StreamingMatcher
+
+matcher = StreamingMatcher("the phrase to find", MatchingConfig())
+for word in words:
+    if (match := matcher.feed(word)) is not None:
+        print(match.timestamp, match.score)
+        break
+```
+
+Grab the frame at any timestamp of any video file:
+
+```python
+from dialogue_locator.config import FrameConfig
+from dialogue_locator.media.frames import FrameExtractor
+from dialogue_locator.models import VideoInfo
+
+video = VideoInfo(path=Path("video.mp4"), source_url="video.mp4")
+FrameExtractor(FrameConfig()).extract(video, 12.5, Path("frame.jpg"))
+```
+
+Check any image for faces, or any clip window for mouth movement:
+
+```python
+from dialogue_locator.config import FaceDetectionConfig, MouthMovementConfig
+from dialogue_locator.vision import FaceDetector, MouthMovementAnalyzer
+
+print(FaceDetector(FaceDetectionConfig()).detect_file(Path("frame.jpg")).face_present)
+print(MouthMovementAnalyzer(MouthMovementConfig()).analyze(video, 12.0, 15.0).moving)
+```
+
+The remaining pieces follow the same pattern: `AudioExtractor` turns any video into a clean
+16 kHz WAV, `probe_media` reads duration, fps and stream info from any file, and `AsrVerifier`
+checks any candidate window against the audio with a bigger model. This independence is also
+what makes the test suite work: every module is tested alone, and the pipeline is tested with
+fakes standing in for all of them.
+
 ## Run — tests
 
 ```bash
@@ -87,9 +169,10 @@ See [Testing](06-testing.md).
 ## Where things end up
 
 ```
-data/work/<sha1(source)[:16]>/video.mp4, audio.wav   # cached media, reused across dialogues
-data/output/<job_id>/frame.jpg, result.json          # results
-~/.cache/huggingface/hub/models--Systran--faster-whisper-*   # model weights
+data/work/<sha1(source)[:16]>/media.*, audio.wav, clip_<ms>_<ms>.mp4   # cached media, reused across dialogues
+data/output/<job_id>/frame.jpg, result.json                            # results
+~/.cache/huggingface/hub/models--Systran--faster-whisper-*             # Whisper weights
+data/models/                                                           # MediaPipe face/mouth models
 ```
 
 Both `data/` and `.venv/` are git-ignored.

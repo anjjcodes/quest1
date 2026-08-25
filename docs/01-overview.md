@@ -16,16 +16,20 @@ nothing is hard-coded for that case.
 
 ## The approach in one paragraph
 
-Download the video (yt-dlp), extract 16 kHz mono audio (FFmpeg), then **stream** speech-to-text
-with a small Faster-Whisper model. Every transcribed word is fed to a sliding-window fuzzy
-matcher (RapidFuzz) as soon as it is decoded; the first window whose score reaches the threshold
+Download the **audio only** (yt-dlp; a low video rendition on hosts without separate audio
+streams), extract 16 kHz mono PCM (FFmpeg), then **stream** speech-to-text with a small
+Faster-Whisper model. Every transcribed word is fed to a sliding-window fuzzy matcher
+(RapidFuzz) as soon as it is decoded; the first window whose score reaches the threshold
 (80/100) is the candidate, and the decoder is stopped there — so a line five minutes into a
 55-minute video costs five minutes of transcription, not fifty-five. A **larger** Whisper model
-then re-transcribes only ±20 s around the candidate to confirm the words and tighten the word
-timestamps. The confirmed start time is converted to a frame number (`floor(t × fps)`) and that
-frame is read with OpenCV and saved as an image. If nothing reaches the threshold, the three best
-non-overlapping windows are reported so the user can tell whether the dialogue text or the video
-is wrong.
+then re-transcribes only ±12 s around the candidate to confirm the words and tighten the word
+timestamps. Only now is full-quality video fetched — a few seconds of **clip** around the
+verified match. The confirmed start time is converted to a frame number (`floor(t × fps)`),
+that frame is read with OpenCV and saved as an image, and two visual checks gate the verdict:
+is a face visible in the frame (V2), and do its lips actually move during the line (V3)? A
+match that fails them is reported as `not_onscreen` — heard, but not an onscreen dialogue. If
+nothing reaches the match threshold, the three best non-overlapping windows are reported so the
+user can tell whether the dialogue text or the video is wrong.
 
 ## How the PS evaluation questions are answered
 
@@ -39,13 +43,19 @@ is wrong.
 
 ## Versions
 
-* **V1 (this code)** — spoken-dialogue localisation and frame extraction.
-* **V2 (planned)** — "is the speaker on camera" visual verification, designed as an additional
-  `Verifier` so nothing upstream changes. See [Extending](08-extending.md).
+* **V1** — spoken-dialogue localisation and frame extraction (streaming ASR + fuzzy match +
+  large-model verification).
+* **V2** — face-presence check on the extracted frame (MediaPipe BlazeFace); no face →
+  `not_onscreen`.
+* **V3** — mouth-movement check over the matched window (MediaPipe Face Landmarker); face
+  present but lips still → `not_onscreen`.
+
+All three are implemented; further visual stages plug in the same way (see
+[Extending](08-extending.md)).
 
 ## Vital statistics
 
-* ~6.5k lines under `src/` including tests; 148 tests (`pytest`), all offline by default.
+* ~8.5k lines under `src/` including tests; 270+ tests (`pytest`), all offline by default.
 * Interfaces: CLI (`dialogue-locator`), HTTP API (`dialogue-locator-server`, FastAPI, OpenAPI at
   `/docs`), single-page web UI at `/`.
 * Measured on an Apple M2 (CPU, int8): streaming pass `base` ≈ 12× realtime, `small` ≈ 3×;

@@ -33,8 +33,12 @@ code { font-family: var(--mono); font-size: .92em; }
 .chips { display: flex; gap: 6px; flex-wrap: wrap; }
 .chip { font-family: var(--mono); font-size: 13px; padding: 4px 10px; border-radius: 999px; background: var(--surface-2); border: 1px solid var(--line); color: var(--text-2); }
 .chip b { color: var(--text); font-weight: 600; }
-.app-footer { text-align: center; color: var(--muted); font-size: 14px; padding: 20px; }
 .icon-btn { padding: 8px; display: inline-grid; place-items: center; border-radius: 10px; }
+@media (max-width: 720px) {
+  .app-header { padding: 12px 16px; }
+  .brand p { display: none; }
+  .chips { display: none; }
+}
 
 /* ---------- settings modal ----------------------------------------------- */
 .modal-overlay { position: fixed; inset: 0; z-index: 50; background: rgba(16, 24, 40, .45); display: grid; place-items: center; padding: 20px; }
@@ -122,7 +126,7 @@ textarea { resize: vertical; min-height: 64px; }
 
 .log-head { display: flex; justify-content: space-between; font-size: 13px; font-weight: 600; color: var(--text-2); text-transform: uppercase; letter-spacing: .04em; margin-bottom: 6px; }
 .log { list-style: none; margin: 0; padding: 0; max-height: 240px; overflow: auto; font-family: var(--mono); font-size: 13px; background: var(--surface-2); border: 1px solid var(--line); border-radius: 8px; }
-.log li { display: grid; grid-template-columns: 72px 110px 1fr; gap: 8px; padding: 5px 10px; border-bottom: 1px solid var(--line); }
+.log li { display: grid; grid-template-columns: 72px 120px 1fr; gap: 8px; padding: 5px 10px; border-bottom: 1px solid var(--line); }
 .log li:last-child { border-bottom: 0; }
 .log .t { color: var(--muted); } .log .s { color: var(--primary); }
 .log:empty::after { content: "Waiting for events…"; display: block; padding: 8px 10px; color: var(--muted); }
@@ -174,3 +178,14 @@ textarea { resize: vertical; min-height: 64px; }
 .raw { margin-top: 16px; }
 .raw summary { cursor: pointer; color: var(--text-2); font-size: 15px; font-weight: 550; }
 .raw pre { margin-top: 8px; }
+
+/* ---------- accessibility ------------------------------------------------- */
+.btn:focus-visible, a.link:focus-visible, .raw summary:focus-visible,
+.check input:focus-visible, .cfg-grid input:focus-visible {
+  outline: 2px solid var(--primary); outline-offset: 2px;
+}
+@media (prefers-reduced-motion: reduce) {
+  .stepper li.active .dot::after { animation: none; }
+  .bar.indeterminate { animation: none; width: 100%; opacity: .35; }
+  .btn, .bar, input[type=text], textarea { transition: none; }
+}

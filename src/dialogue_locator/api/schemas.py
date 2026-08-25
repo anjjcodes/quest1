@@ -173,7 +173,6 @@ class ErrorSchema(BaseModel):
     stage: str
     message: str
     details: dict[str, Any] = Field(default_factory=dict)
-    near_misses: list[dict[str, Any]] | None = None
 
 
 class JobResponse(BaseModel):

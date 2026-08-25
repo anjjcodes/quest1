@@ -49,6 +49,9 @@ class AsrVerifier(Verifier):
         self._matching = matching_config
         self._config = config
 
+    def warm_up(self) -> None:
+        self._transcriber.warm_up()
+
     def verify(self, candidate: MatchCandidate, context: VerificationContext) -> VerificationOutcome:
         if not self._config.enabled:
             logger.info("[%s] disabled by configuration; skipping", self.name)

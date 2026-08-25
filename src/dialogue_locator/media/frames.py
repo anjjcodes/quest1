@@ -55,9 +55,12 @@ def frame_to_timestamp(frame_number: int, fps: float) -> float:
 class FrameExtractor:
     """Extract single frames from a video file."""
 
-    def __init__(self, config: FrameConfig, ffmpeg_binary: str = "ffmpeg") -> None:
+    def __init__(
+        self, config: FrameConfig, ffmpeg_binary: str = "ffmpeg", ffprobe_binary: str = "ffprobe"
+    ) -> None:
         self._config = config
         self._ffmpeg = ffmpeg_binary
+        self._ffprobe = ffprobe_binary
 
     # ------------------------------------------------------------------ #
     # Public API
@@ -182,7 +185,7 @@ class FrameExtractor:
             "-frames:v", "1", "-f", "rawvideo", "-pix_fmt", "bgr24", "pipe:1",
         ]  # fmt: skip
         probe_cmd = [
-            binary.replace("ffmpeg", "ffprobe") if Path(binary).name.startswith("ffmpeg") else "ffprobe",
+            ensure_binary(self._ffprobe),
             "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height",
             "-of", "csv=p=0", str(path),
         ]  # fmt: skip

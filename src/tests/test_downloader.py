@@ -44,8 +44,8 @@ def test_is_url_false_for_paths():
 # Local file path
 # --------------------------------------------------------------------------- #
 @requires_ffmpeg
-def test_fetch_local_file(sample_video: Path, tmp_path: Path):
-    info = VideoDownloader(DownloadConfig()).fetch(str(sample_video), tmp_path)
+def test_fetch_video_clip_local_file(sample_video: Path, tmp_path: Path):
+    info = VideoDownloader(DownloadConfig()).fetch_video_clip(str(sample_video), 0.5, 1.5, tmp_path)
     assert info.path == sample_video.resolve()
     assert info.source_url == str(sample_video)
     assert info.title == "sample"
@@ -56,13 +56,13 @@ def test_fetch_local_file(sample_video: Path, tmp_path: Path):
 @requires_ffmpeg
 def test_fetch_local_missing_file(tmp_path: Path):
     with expect_error(InvalidURLError):
-        VideoDownloader(DownloadConfig()).fetch(str(tmp_path / "missing.mp4"), tmp_path)
+        VideoDownloader(DownloadConfig()).fetch_search_media(str(tmp_path / "missing.mp4"), tmp_path)
 
 
 @requires_ffmpeg
-def test_fetch_audio_only_file_is_unsupported(sample_wav: Path, tmp_path: Path):
+def test_fetch_video_clip_audio_only_file_is_unsupported(sample_wav: Path, tmp_path: Path):
     with expect_error(UnsupportedVideoError):
-        VideoDownloader(DownloadConfig()).fetch(str(sample_wav), tmp_path)
+        VideoDownloader(DownloadConfig()).fetch_video_clip(str(sample_wav), 1.0, 2.0, tmp_path)
 
 
 @requires_ffmpeg
@@ -84,7 +84,7 @@ def test_fetch_search_media_local_wav_is_searchable(sample_wav: Path, tmp_path: 
 
 def test_fetch_empty_source(tmp_path: Path):
     with expect_error(InvalidURLError):
-        VideoDownloader(DownloadConfig()).fetch("", tmp_path)
+        VideoDownloader(DownloadConfig()).fetch_search_media("", tmp_path)
 
 
 # --------------------------------------------------------------------------- #
@@ -134,10 +134,10 @@ def fake_ydl(monkeypatch: pytest.MonkeyPatch, sample_video: Path, tmp_path: Path
 
 
 @requires_ffmpeg
-def test_fetch_url_success(fake_ydl, tmp_path: Path):
+def test_fetch_video_clip_url_success(fake_ydl, tmp_path: Path):
     events: list[ProgressEvent] = []
-    info = VideoDownloader(DownloadConfig(max_height=360)).fetch(
-        "https://example.com/v", tmp_path / "job", progress=events.append, reuse_existing=False
+    info = VideoDownloader(DownloadConfig(max_height=360, clip_padding_seconds=2.0)).fetch_video_clip(
+        "https://example.com/v", 10.0, 13.0, tmp_path / "job", progress=events.append, reuse_existing=False
     )
     assert info.title == "Fake Title"
     assert info.path == fake_ydl.produced
@@ -147,7 +147,7 @@ def test_fetch_url_success(fake_ydl, tmp_path: Path):
     # config reaches yt-dlp
     assert "height<=360" in fake_ydl.last_opts["format"]
     assert fake_ydl.last_opts["noplaylist"] is True
-    assert "video.%(ext)s" in fake_ydl.last_opts["outtmpl"]
+    assert "clip_8000_15000.%(ext)s" in fake_ydl.last_opts["outtmpl"]
 
 
 @requires_ffmpeg
@@ -177,35 +177,22 @@ def test_fetch_search_media_url(fake_ydl, tmp_path: Path):
 def test_fetch_url_error_mapping(fake_ydl, tmp_path: Path, behaviour, expected):
     fake_ydl.behaviour = behaviour
     with expect_error(expected) as exc:
-        VideoDownloader(DownloadConfig()).fetch("https://example.com/v", tmp_path / "job", reuse_existing=False)
+        VideoDownloader(DownloadConfig()).fetch_search_media(
+            "https://example.com/v", tmp_path / "job", reuse_existing=False
+        )
     assert exc.value.stage == "download"
     if behaviour == "ytdlp_error":
         assert "ERROR:" not in exc.value.message  # prefix stripped for users
 
 
 @requires_ffmpeg
-def test_fetch_url_reuses_existing_download(monkeypatch: pytest.MonkeyPatch, sample_video: Path, tmp_path: Path):
-    job = tmp_path / "job"
-    job.mkdir()
-    (job / "video.mp4").write_bytes(sample_video.read_bytes())
-    (job / "video.mp4.part").write_bytes(b"")  # leftover partial must be ignored
-
-    def boom(*a, **k):
-        raise AssertionError("network must not be touched when a download exists")
-
-    monkeypatch.setattr(dl_module.yt_dlp, "YoutubeDL", boom)
-    info = VideoDownloader(DownloadConfig()).fetch("https://example.com/v", job)
-    assert info.path == job / "video.mp4"
-    assert info.source_url == "https://example.com/v"
-
-
-@requires_ffmpeg
-def test_fetch_search_media_reuses_only_its_own_cache(
+def test_fetch_search_media_reuses_existing_download(
     monkeypatch: pytest.MonkeyPatch, sample_video: Path, tmp_path: Path
 ):
     job = tmp_path / "job"
     job.mkdir()
     (job / "media.mp4").write_bytes(sample_video.read_bytes())
+    (job / "media.mp4.part").write_bytes(b"")  # leftover partial must be ignored
 
     def boom(*a, **k):
         raise AssertionError("network must not be touched when a search download exists")
@@ -213,6 +200,7 @@ def test_fetch_search_media_reuses_only_its_own_cache(
     monkeypatch.setattr(dl_module.yt_dlp, "YoutubeDL", boom)
     info = VideoDownloader(DownloadConfig()).fetch_search_media("https://example.com/v", job)
     assert info.path == job / "media.mp4"
+    assert info.source_url == "https://example.com/v"
 
 
 @requires_ffmpeg
@@ -266,11 +254,11 @@ def test_fetch_video_clip_reuses_cached_range(monkeypatch: pytest.MonkeyPatch, s
 
 
 @requires_ffmpeg
-def test_search_and_video_caches_are_independent(fake_ydl, sample_video: Path, tmp_path: Path):
-    # A cached full-quality video must not satisfy the search fetch (and vice versa).
+def test_search_and_clip_caches_are_independent(fake_ydl, sample_video: Path, tmp_path: Path):
+    # A cached video clip must not satisfy the search fetch (and vice versa).
     job = tmp_path / "job"
     job.mkdir()
-    (job / "video.mp4").write_bytes(sample_video.read_bytes())
+    (job / "clip_8000_15000.mp4").write_bytes(sample_video.read_bytes())
 
     VideoDownloader(DownloadConfig()).fetch_search_media("https://example.com/v", job)
     assert fake_ydl.last_opts is not None
@@ -280,17 +268,6 @@ def test_search_and_video_caches_are_independent(fake_ydl, sample_video: Path, t
 # --------------------------------------------------------------------------- #
 # Real network (opt-in)
 # --------------------------------------------------------------------------- #
-@pytest.mark.network
-@requires_ffmpeg
-def test_real_youtube_download(tmp_path: Path):
-    info = VideoDownloader(DownloadConfig(max_height=240)).fetch(
-        "https://www.youtube.com/watch?v=jNQXAC9IVRw", tmp_path / "yt"
-    )
-    assert info.path.is_file() and info.path.suffix == ".mp4"
-    assert info.duration and 18 < info.duration < 21
-    assert info.fps and info.frame_count
-
-
 @pytest.mark.network
 @requires_ffmpeg
 def test_real_youtube_search_media(tmp_path: Path):
@@ -318,7 +295,9 @@ def test_real_youtube_video_clip(tmp_path: Path):
 @pytest.mark.network
 def test_real_invalid_video(tmp_path: Path):
     with expect_error(DownloadError):
-        VideoDownloader(DownloadConfig()).fetch("https://www.youtube.com/watch?v=xxxxxxxxxxx", tmp_path / "bad")
+        VideoDownloader(DownloadConfig()).fetch_search_media(
+            "https://www.youtube.com/watch?v=xxxxxxxxxxx", tmp_path / "bad"
+        )
 
 
 # --------------------------------------------------------------------------- #

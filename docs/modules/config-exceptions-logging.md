@@ -58,9 +58,10 @@ DialogueLocatorError(message, *, details)    .stage  .to_dict()
 ├── AudioExtractionError         stage="audio"
 ├── TranscriptionError           stage="transcription"
 ├── VerificationError            stage="verification"
-├── NoMatchFoundError            stage="matching"    (.near_misses; not raised by the pipeline)
 ├── PipelineCancelledError       stage set to the stage being run when cancelled
-└── FrameExtractionError         stage="frame"
+├── FrameExtractionError         stage="frame"
+├── FaceDetectionError           stage="face_detection"   (V2; fails open in the pipeline)
+└── MouthMovementError           stage="mouth_movement"   (V3; fails open in the pipeline)
 ```
 
 ### Contract
@@ -72,8 +73,8 @@ DialogueLocatorError(message, *, details)    .stage  .to_dict()
   exactly this JSON; the CLI prints `ERROR [stage]: message`; the UI turns `stage` into a hint.
 * Before raising, every boundary **logs** — `WARNING` for user/input problems, `ERROR` for
   system/tool failures — so a failure is visible in the server log even when the caller swallows it.
-* `NoMatchFoundError` exists for callers that prefer raise semantics; the pipeline itself returns a
-  `LocalizationResult(status=NOT_FOUND)` because "not found" is a legitimate answer, not a crash.
+* "Not found" is never an exception: the pipeline returns a
+  `LocalizationResult(status=NOT_FOUND)` with near-misses, because a legitimate answer is not a crash.
 
 ---
 

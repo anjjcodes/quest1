@@ -48,7 +48,7 @@ def expect_error(exc_type: type[BaseException], match: str | None = None):
     by the code under test is clearly framed as expected, e.g.::
 
         with expect_error(DownloadError, match="unavailable") as exc:
-            downloader.fetch(bad_url, tmp_path)
+            downloader.fetch_search_media(bad_url, tmp_path)
         assert exc.value.stage == "download"
     """
     logger.info(">>> expecting %s (an ERROR line below is the code under test rejecting bad input)", exc_type.__name__)
