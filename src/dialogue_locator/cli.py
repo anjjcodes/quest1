@@ -80,7 +80,12 @@ def format_result(result: LocalizationResult) -> str:
     if result.match is not None:  # localised: FOUND or NOT_ONSCREEN
         lines = []
         if result.status is ResultStatus.NOT_ONSCREEN:
-            lines.append("Verdict   : Not an onscreen dialogue - no face in the matched frame")
+            reason = (
+                "face visible but mouth not moving"
+                if result.face_present
+                else "no face in the matched frame"
+            )
+            lines.append(f"Verdict   : Not an onscreen dialogue - {reason}")
         lines += [
             f"Timestamp : {result.timestamp}",
             f"Frame     : {result.frame_number}",
@@ -93,6 +98,11 @@ def format_result(result: LocalizationResult) -> str:
             lines.append(f"Face      : {len(faces)} detected (best {faces[0].confidence:.2f})")
         elif result.face_present is False:
             lines.append("Face      : none detected")
+        if result.mouth_movement is not None:
+            mm = result.mouth_movement
+            state = {True: "moving", False: "not moving", None: "indeterminate"}[mm.moving]
+            score = "" if mm.movement_score is None else f" (score {mm.movement_score:.3f})"
+            lines.append(f"Mouth     : {state}{score}")
         for v in result.verifications:
             lines.append(f"Verify    : {v.verifier} -> {v.status.value}" + (f" ({v.score:.1f})" if v.score is not None else ""))
     else:

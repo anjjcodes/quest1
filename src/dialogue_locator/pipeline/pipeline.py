@@ -14,6 +14,10 @@ Stages, in order (each maps to a :class:`PipelineStage`)::
     face_detection FaceDetector     -> FaceDetectionResult (V2: is a human face
                    visible in the extracted frame? No face -> status becomes
                    NOT_ONSCREEN; a failed check fails open with a warning)
+    mouth_movement MouthMovementAnalyzer -> MouthMovementResult (V3, only after
+                   V2 confirms a face: do the lips move during the matched
+                   window? Not moving -> NOT_ONSCREEN; indeterminate or failed
+                   fails open with a warning)
     done
 
 The search stages run on a cheap audio-first download; full-quality video is
@@ -50,6 +54,7 @@ from dialogue_locator.config import Settings
 from dialogue_locator.exceptions import (
     DialogueLocatorError,
     FaceDetectionError,
+    MouthMovementError,
     PipelineCancelledError,
 )
 from dialogue_locator.matching.matcher import StreamingMatcher, TargetDialogue
@@ -72,6 +77,7 @@ from dialogue_locator.transcription.faster_whisper import FasterWhisperTranscrib
 from dialogue_locator.verification.asr_verifier import AsrVerifier
 from dialogue_locator.verification.base import VerificationContext, Verifier
 from dialogue_locator.vision.face_detector import FaceDetector
+from dialogue_locator.vision.mouth_movement import MouthMovementAnalyzer
 
 logger = logging.getLogger(__name__)
 
@@ -120,6 +126,7 @@ class DialoguePipeline:
         retry_transcriber: Transcriber | None = None,
         frame_extractor: FrameExtractor | None = None,
         face_detector: FaceDetector | None = None,
+        mouth_analyzer: MouthMovementAnalyzer | None = None,
     ) -> None:
         self.settings = settings
         self.downloader = downloader or VideoDownloader(settings.download, settings.audio.ffprobe_binary)
@@ -139,6 +146,7 @@ class DialoguePipeline:
         self.verifiers = build_default_verifiers(settings) if verifiers is None else verifiers
         self.frame_extractor = frame_extractor or FrameExtractor(settings.frame, settings.audio.ffmpeg_binary)
         self.face_detector = face_detector or FaceDetector(settings.face_detection)
+        self.mouth_analyzer = mouth_analyzer or MouthMovementAnalyzer(settings.mouth_movement)
 
     # ------------------------------------------------------------------ #
     def warm_up(self) -> None:
@@ -382,6 +390,48 @@ class _Run:
                     logger.info("No face in frame %s; verdict: not_onscreen", result.frame.image_path.name)
                 self._emit(PipelineStage.FACE_DETECTION, message, 1.0, detected.to_dict())
             self._end(PipelineStage.FACE_DETECTION)
+
+            # ---- mouth movement (V3) --------------------------------------
+            # Only once V2 confirmed a face: track the lips across the clip's
+            # frames for the matched window. A face whose mouth never moves is
+            # not speaking the line (reaction shot, voice-over) -> NOT_ONSCREEN.
+            # Indeterminate (too few landmark frames) or a crashed analyser
+            # fails open with a warning, like the face check.
+            if result.face_detection is not None and result.face_detection.face_present:
+                self._check_cancel()
+                self._begin(PipelineStage.MOUTH_MOVEMENT, "Checking for mouth movement")
+                try:
+                    result.mouth_movement = self.p.mouth_analyzer.analyze(
+                        video, current.start, current.end
+                    )
+                except MouthMovementError as exc:
+                    warning = f"Mouth check failed: {exc.message}"
+                    self.warnings.append(warning)
+                    logger.warning("Mouth movement warning: %s", warning)
+                    self._emit(PipelineStage.MOUTH_MOVEMENT, warning, 1.0, {"error": exc.message})
+                else:
+                    movement = result.mouth_movement
+                    if movement.moving is True:
+                        message = f"Mouth movement detected (score {movement.movement_score:.3f})"
+                    elif movement.moving is False:
+                        result.status = ResultStatus.NOT_ONSCREEN
+                        message = "Face visible but mouth not moving - not an onscreen dialogue"
+                        logger.info(
+                            "Mouth still during %s-%s (score %.4f); verdict: not_onscreen",
+                            format_timestamp(movement.window_start),
+                            format_timestamp(movement.window_end),
+                            movement.movement_score or 0.0,
+                        )
+                    else:
+                        warning = (
+                            "Mouth movement could not be judged: face landmarks in only "
+                            f"{movement.frames_with_face} of {movement.frames_analyzed} frames."
+                        )
+                        self.warnings.append(warning)
+                        logger.warning("Mouth movement warning: %s", warning)
+                        message = warning
+                    self._emit(PipelineStage.MOUTH_MOVEMENT, message, 1.0, movement.to_dict())
+                self._end(PipelineStage.MOUTH_MOVEMENT)
         else:
             warning = "Source has no video stream; returning the timestamp without a frame."
             self.warnings.append(warning)

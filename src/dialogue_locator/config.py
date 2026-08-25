@@ -195,10 +195,13 @@ class FaceDetectionConfig(BaseModel):
     """
 
     min_detection_confidence: float = Field(
-        0.5,
+        0.3,
         ge=0,
         le=1,
-        description="Minimum BlazeFace score for a detection to count as a face.",
+        description="Minimum BlazeFace score for a detection to count as a face. "
+        "Calibrated on real frames: faces in cinematic mid/wide shots score as low "
+        "as ~0.34 (close-ups ~0.97) while non-face junk stays at or below ~0.2, so "
+        "0.3 separates them; the model's usual 0.5 default misses distant faces.",
     )
     model_path: Path = Field(
         Path("data/models/blaze_face_short_range.tflite"),
@@ -211,6 +214,63 @@ class FaceDetectionConfig(BaseModel):
         description="Where to fetch the model file from when model_path is missing.",
     )
     download_timeout_seconds: int = Field(60, ge=1)
+
+    @field_validator("model_path", mode="before")
+    @classmethod
+    def _expand(cls, value: str | Path) -> Path:
+        return Path(value).expanduser()
+
+
+class MouthMovementConfig(BaseModel):
+    """Settings for the V3 mouth-movement check (MediaPipe Face Landmarker).
+
+    Tracks the lip landmarks across the video frames of the matched dialogue
+    window and decides whether the mouth moves significantly. The per-frame
+    signal is *mouth openness*: the inner-lip gap (landmarks 13-14) divided by
+    the mouth width (61-291), which is scale- and distance-invariant. The
+    movement score is the standard deviation of that signal over the window;
+    measured values: ~0.09 while speaking vs ~0.001 landmark jitter on a
+    static face, so the default threshold sits well between the two.
+    """
+
+    movement_threshold: float = Field(
+        0.02,
+        gt=0,
+        description="Minimum standard deviation of mouth openness to count as "
+        "significant movement.",
+    )
+    min_face_frames: int = Field(
+        5,
+        ge=2,
+        description="Minimum frames with a detected face needed for a verdict; "
+        "fewer makes the result indeterminate rather than a false 'not moving'.",
+    )
+    max_window_seconds: float = Field(
+        10.0,
+        gt=0,
+        description="Cap on how much of the dialogue window is analysed; long "
+        "lines are judged on their first seconds.",
+    )
+    min_face_confidence: float = Field(
+        0.3,
+        ge=0,
+        le=1,
+        description="Face detection/presence confidence for the landmarker, "
+        "lowered from MediaPipe's 0.5 default for the same reason as "
+        "face_detection.min_detection_confidence: faces in mid/wide shots "
+        "score lower than close-ups.",
+    )
+    model_path: Path = Field(
+        Path("data/models/face_landmarker.task"),
+        description="Where the Face Landmarker model file is cached. Downloaded "
+        "from model_url on first use if missing (~3.7 MB, one-time).",
+    )
+    model_url: str = Field(
+        "https://storage.googleapis.com/mediapipe-models/face_landmarker/"
+        "face_landmarker/float16/latest/face_landmarker.task",
+        description="Where to fetch the model file from when model_path is missing.",
+    )
+    download_timeout_seconds: int = Field(120, ge=1)
 
     @field_validator("model_path", mode="before")
     @classmethod
@@ -279,6 +339,7 @@ class Settings(BaseSettings):
     verification: VerificationConfig = Field(default_factory=VerificationConfig)
     frame: FrameConfig = Field(default_factory=FrameConfig)
     face_detection: FaceDetectionConfig = Field(default_factory=FaceDetectionConfig)
+    mouth_movement: MouthMovementConfig = Field(default_factory=MouthMovementConfig)
     storage: StorageConfig = Field(default_factory=StorageConfig)
     server: ServerConfig = Field(default_factory=ServerConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)

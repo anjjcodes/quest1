@@ -210,6 +210,16 @@ def test_result_to_dict():
 
 
 # --------------------------------------------------------------------------- #
+# Calibration
+# --------------------------------------------------------------------------- #
+def test_default_confidence_calibrated_for_wide_shots():
+    # Faces in cinematic mid/wide shots score ~0.34 with BlazeFace while junk
+    # detections stay <=~0.2 (measured on real pipeline frames). MediaPipe's
+    # usual 0.5 default misses those faces - keep the calibrated 0.3.
+    assert FaceDetectionConfig().min_detection_confidence == 0.3
+
+
+# --------------------------------------------------------------------------- #
 # Real model (network)
 # --------------------------------------------------------------------------- #
 @pytest.mark.network

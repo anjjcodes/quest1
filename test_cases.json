@@ -1,0 +1,62 @@
+[
+  {
+    "name": "Sherlock: A Case of Evil (2002)",
+    "link": "https://www.youtube.com/watch?v=15HSOpegXg8",
+    "dialogue": "bring the results upto my office before you leave",
+    "type": "onscreen (face present, mouth moving)"
+  },
+  {
+    "name": "The Adventures of Sherlock Holmes: A Scandal in Bohemia",
+    "link": "https://ok.ru/video/248244667877",
+    "dialogue": "My mind rebels at stagnation",
+    "type": "onscreen (face present, mouth moving)"
+  },
+  {
+    "name": "Me at the zoo",
+    "link": "https://www.youtube.com/watch?v=jNQXAC9IVRw",
+    "dialogue": "they have really really really long trunks",
+    "type": "onscreen (face present, mouth moving)"
+  },
+  {
+    "name": "The Ridiculous Engineering Of Notion (ft. Notion Team)",
+    "link": "https://www.youtube.com/watch?v=b00sgRR_Vc0",
+    "dialogue": "Welcome to behind the scenes and stealing coffee from notion",
+    "type": "not onscreen (no face in frame - title card)"
+  },
+  {
+    "name": "How to Write Dialogue That Doesn't Suck",
+    "link": "https://www.youtube.com/watch?v=XgPGL6bFYr8",
+    "dialogue": "its gonna ruin your entire",
+    "type": "not onscreen (face visible but mouth not moving)"
+  },
+  {
+    "name": "President Kennedy's Speech at Rice University",
+    "link": "https://www.youtube.com/watch?v=WZyRbnpGyzQ",
+    "dialogue": "We choose to go to the moon in this decade and do the other things",
+    "type": "found (V1 run; visual checks not run)"
+  },
+  {
+    "name": "Avengers: Infinity War (2018)",
+    "link": "https://www.youtube.com/watch?v=Y2qHIb76NIY",
+    "dialogue": "you're not the only one cursed with knowledge",
+    "type": "found (V1 run; visual checks not run)"
+  },
+  {
+    "name": "Do Not Skip this video!",
+    "link": "https://www.youtube.com/watch?v=T9QoUzPp-VY",
+    "dialogue": "It is still our website",
+    "type": "found (V1 run; visual checks not run)"
+  },
+  {
+    "name": "FRIENDS — Monica's Barbados hair",
+    "link": "https://www.youtube.com/watch?v=QPngpHrP924",
+    "dialogue": "Not really",
+    "type": "not onscreen (no face in frame)"
+  },
+  {
+    "name": "ok.ru sample video",
+    "link": "https://ok.ru/video/1829048486505",
+    "dialogue": "Killing all the birds",
+    "type": "found (V1 run; visual checks not run)"
+  }
+]

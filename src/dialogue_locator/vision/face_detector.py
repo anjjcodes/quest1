@@ -29,8 +29,6 @@ pipeline job the server runs at a time.
 from __future__ import annotations
 
 import logging
-import urllib.error
-import urllib.request
 from pathlib import Path
 from types import TracebackType
 from typing import Any
@@ -41,6 +39,7 @@ import numpy as np
 from dialogue_locator.config import FaceDetectionConfig
 from dialogue_locator.exceptions import FaceDetectionError
 from dialogue_locator.models import FaceBox, FaceDetectionResult
+from dialogue_locator.vision.model_files import ensure_model_file
 
 logger = logging.getLogger(__name__)
 
@@ -159,33 +158,12 @@ class FaceDetector:
 
     def _ensure_model(self) -> Path:
         """Return the model file path, downloading it first if it is missing."""
-        model_path = self._config.model_path
-        if model_path.is_file():
-            return model_path
-
-        url = self._config.model_url
-        logger.info("Face model missing; downloading %s -> %s", url, model_path)
-        try:
-            model_path.parent.mkdir(parents=True, exist_ok=True)
-            tmp_path = model_path.with_suffix(model_path.suffix + ".part")
-            with urllib.request.urlopen(url, timeout=self._config.download_timeout_seconds) as resp:
-                data = resp.read()
-            if len(data) < 1024:  # a storage error page, not a model
-                raise FaceDetectionError(
-                    f"Face model download returned only {len(data)} bytes", details={"url": url}
-                )
-            tmp_path.write_bytes(data)
-            tmp_path.replace(model_path)  # atomic: never leave a half-written model
-        except FaceDetectionError:
-            raise
-        except (urllib.error.URLError, OSError, ValueError) as exc:
-            logger.error("Face model download failed: %s", exc)
-            raise FaceDetectionError(
-                f"Cannot download face detection model: {exc}",
-                details={"url": url, "model_path": str(model_path)},
-            ) from exc
-        logger.info("Face model saved: %s (%d bytes)", model_path, len(data))
-        return model_path
+        return ensure_model_file(
+            self._config.model_path,
+            self._config.model_url,
+            self._config.download_timeout_seconds,
+            FaceDetectionError,
+        )
 
     @staticmethod
     def _to_result(mp_result: Any, width: int, height: int) -> FaceDetectionResult:

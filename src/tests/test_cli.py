@@ -12,8 +12,16 @@ from dialogue_locator.models import (
     FrameInfo,
     LocalizationResult,
     MatchCandidate,
+    MouthMovementResult,
     ResultStatus,
 )
+
+
+def _mouth(moving: bool | None, score: float | None) -> MouthMovementResult:
+    return MouthMovementResult(
+        moving=moving, movement_score=score, threshold=0.02,
+        frames_analyzed=26, frames_with_face=26, window_start=312.48, window_end=314.0,
+    )
 
 
 def _found() -> LocalizationResult:
@@ -86,12 +94,33 @@ def test_format_found_with_face():
     assert "Verdict" not in text
 
 
+def test_format_found_with_moving_mouth():
+    result = _found()
+    result.mouth_movement = _mouth(moving=True, score=0.094)
+    text = cli.format_result(result)
+    assert "Mouth     : moving (score 0.094)" in text and "Verdict" not in text
+
+
 def test_format_not_onscreen():
     text = cli.format_result(_not_onscreen())
-    assert text.startswith("Verdict   : Not an onscreen dialogue")
+    assert text.startswith("Verdict   : Not an onscreen dialogue - no face in the matched frame")
     assert "Face      : none detected" in text
     # the localisation details are still printed below the verdict
     assert "Timestamp : 00:05:12.480" in text and "Frame     : 7812" in text
+
+
+def test_format_not_onscreen_due_to_still_mouth():
+    result = _found()
+    result.status = ResultStatus.NOT_ONSCREEN
+    result.face_detection = FaceDetectionResult(
+        faces=(FaceBox(x=1, y=2, width=3, height=4, confidence=0.9),),
+        image_width=320,
+        image_height=240,
+    )
+    result.mouth_movement = _mouth(moving=False, score=0.003)
+    text = cli.format_result(result)
+    assert "Verdict   : Not an onscreen dialogue - face visible but mouth not moving" in text
+    assert "Mouth     : not moving (score 0.003)" in text
 
 
 def test_format_not_found():

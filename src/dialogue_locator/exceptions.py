@@ -142,3 +142,9 @@ class FaceDetectionError(DialogueLocatorError):
     """The face detector could not run (model missing/undownloadable, bad image)."""
 
     stage = "face_detection"
+
+
+class MouthMovementError(DialogueLocatorError):
+    """The mouth-movement analyser could not run (model or video unreadable)."""
+
+    stage = "mouth_movement"

@@ -13,6 +13,7 @@ Data flow between stages::
     Verifier          -> VerificationOutcome           (0..n, one per verifier)
     FrameExtractor    -> FrameInfo
     FaceDetector      -> FaceDetectionResult           (V2: faces in a frame)
+    MouthMovementAnalyzer -> MouthMovementResult       (V3: lip activity in a window)
     Pipeline          -> LocalizationResult            (aggregates all of the above)
 """
 
@@ -54,6 +55,7 @@ class PipelineStage(str, Enum):
     VERIFICATION = "verification"
     FRAME = "frame"
     FACE_DETECTION = "face_detection"  # V2: is a human face visible in the frame?
+    MOUTH_MOVEMENT = "mouth_movement"  # V3: is the mouth moving during the line?
     DONE = "done"
 
 
@@ -291,6 +293,40 @@ class FaceDetectionResult:
 
 
 # --------------------------------------------------------------------------- #
+# Mouth movement (V3)
+# --------------------------------------------------------------------------- #
+@dataclass(frozen=True)
+class MouthMovementResult:
+    """Lip activity over the video frames of a dialogue window.
+
+    ``moving`` is ``None`` when the analyser saw too few frames with a face to
+    judge (indeterminate), otherwise whether the movement score - the standard
+    deviation of the per-frame mouth-openness signal - reached the threshold.
+    """
+
+    moving: bool | None
+    movement_score: float | None  # None when no frame had a face
+    threshold: float
+    frames_analyzed: int
+    frames_with_face: int
+    window_start: float  # absolute seconds into the source, as analysed
+    window_end: float
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "moving": self.moving,
+            "movement_score": None
+            if self.movement_score is None
+            else round(self.movement_score, 4),
+            "threshold": self.threshold,
+            "frames_analyzed": self.frames_analyzed,
+            "frames_with_face": self.frames_with_face,
+            "window_start": round(self.window_start, 3),
+            "window_end": round(self.window_end, 3),
+        }
+
+
+# --------------------------------------------------------------------------- #
 # Final result
 # --------------------------------------------------------------------------- #
 class ResultStatus(str, Enum):
@@ -317,6 +353,7 @@ class LocalizationResult:
     verifications: list[VerificationOutcome] = field(default_factory=list)
     frame: FrameInfo | None = None
     face_detection: FaceDetectionResult | None = None  # V2; None = check not run
+    mouth_movement: MouthMovementResult | None = None  # V3; None = check not run
 
     # Populated when status == NOT_FOUND
     near_misses: list[MatchCandidate] = field(default_factory=list)
@@ -352,6 +389,11 @@ class LocalizationResult:
         """Whether a face is visible in the extracted frame (None = check not run)."""
         return self.face_detection.face_present if self.face_detection else None
 
+    @property
+    def mouth_moving(self) -> bool | None:
+        """Whether the mouth moves during the line (None = not run or indeterminate)."""
+        return self.mouth_movement.moving if self.mouth_movement else None
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "status": self.status.value,
@@ -368,6 +410,8 @@ class LocalizationResult:
             "frame": self.frame.to_dict() if self.frame else None,
             "face_present": self.face_present,
             "face_detection": self.face_detection.to_dict() if self.face_detection else None,
+            "mouth_moving": self.mouth_moving,
+            "mouth_movement": self.mouth_movement.to_dict() if self.mouth_movement else None,
             "near_misses": [m.to_dict() for m in self.near_misses],
             "warnings": list(self.warnings),
             "stage_timings": {k: round(v, 3) for k, v in self.stage_timings.items()},

@@ -3,10 +3,10 @@
   "use strict";
 
   const $ = (id) => document.getElementById(id);
-  const STAGES = ["input", "download", "audio", "transcription", "verification", "download_video", "frame", "face_detection"];
+  const STAGES = ["input", "download", "audio", "transcription", "verification", "download_video", "frame", "face_detection", "mouth_movement"];
   const POLL_MS = 1000;
   const MAX_POLL_FAILURES = 5;
-  const TIMING_COLORS = { input: "#94a3b8", download: "#60a5fa", audio: "#34d399", transcription: "#f59e0b", matching: "#f59e0b", download_video: "#3b82f6", verification: "#a78bfa", frame: "#f472b6", face_detection: "#22d3ee" };
+  const TIMING_COLORS = { input: "#94a3b8", download: "#60a5fa", audio: "#34d399", transcription: "#f59e0b", matching: "#f59e0b", download_video: "#3b82f6", verification: "#a78bfa", frame: "#f472b6", face_detection: "#22d3ee", mouth_movement: "#fb7185" };
 
   const els = {
     form: $("job-form"), source: $("source"), dialogue: $("dialogue"), reuse: $("reuse"),
@@ -147,7 +147,8 @@
       li.className = "";
       const meta = li.querySelector(".meta");
       if (timings[s] != null) meta.textContent = fmtSecs(timings[s]);
-      if (notFound && (s === "download_video" || s === "verification" || s === "frame" || s === "face_detection")) { li.classList.add("skipped"); meta.textContent = "skipped"; continue; }
+      if (notFound && (s === "download_video" || s === "verification" || s === "frame" || s === "face_detection" || s === "mouth_movement")) { li.classList.add("skipped"); meta.textContent = "skipped"; continue; }
+      if (finished && s === "mouth_movement" && timings[s] == null) { li.classList.add("skipped"); meta.textContent = "skipped"; continue; }
       if (job.status === "done" || (stage === "done" && job.status === "running")) li.classList.add("done");
       else if (i < idx) li.classList.add("done");
       else if (i === idx) li.classList.add(finished ? "failed" : "active");
@@ -217,7 +218,9 @@
     const notOnscreen = r.status === "not_onscreen";
     const banner = $("r-onscreen");
     banner.hidden = !notOnscreen;
-    if (notOnscreen) banner.textContent = "Not an onscreen dialogue — the line is heard at this timestamp, but no human face is visible in the frame.";
+    if (notOnscreen) banner.textContent = r.face_present
+      ? "Not an onscreen dialogue — a face is visible, but its mouth is not moving while the line is spoken."
+      : "Not an onscreen dialogue — the line is heard at this timestamp, but no human face is visible in the frame.";
     const url = `${job.frame_url}?t=${Date.now()}`;
     $("frame-img").src = url; $("frame-link").href = url; $("frame-download").href = url;
     $("frame-caption").textContent = r.frame ? `frame ${r.frame.frame_number} · ${r.frame.timestamp_str} · ${r.frame.width}×${r.frame.height} · ${r.frame.fps.toFixed(3)} fps` : "";
@@ -239,6 +242,14 @@
       : r.face_present === false
         ? `<span class="badge not_onscreen">no face in frame</span>`
         : `<span class="badge none">not run</span>`;
+    const mm = r.mouth_movement;
+    $("r-mouth").innerHTML = !mm
+      ? `<span class="badge none">not run</span>`
+      : mm.moving === true
+        ? `<span class="badge confirmed">moving · score ${mm.movement_score.toFixed(3)}</span>`
+        : mm.moving === false
+          ? `<span class="badge not_onscreen">not moving · score ${(mm.movement_score ?? 0).toFixed(3)}</span>`
+          : `<span class="badge none" title="face landmarks in ${mm.frames_with_face} of ${mm.frames_analyzed} frames">indeterminate</span>`;
     $("r-scanned").textContent = r.transcribed_seconds != null ? `${fmtSecs(r.transcribed_seconds)}${r.video && r.video.duration ? ` of ${fmtSecs(r.video.duration)} (${Math.round(100 * r.transcribed_seconds / r.video.duration)}%)` : ""}` : "—";
     $("r-video").textContent = r.video ? `${r.video.title || "—"} · ${r.video.width}×${r.video.height} @ ${(r.video.fps || 0).toFixed(3)} fps` : "—";
     $("r-total").textContent = fmtSecs((r.stage_timings || {}).total);

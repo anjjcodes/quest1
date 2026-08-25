@@ -17,6 +17,7 @@ from dialogue_locator.exceptions import (
     FaceDetectionError,
     InvalidDialogueError,
     InvalidURLError,
+    MouthMovementError,
     PipelineCancelledError,
 )
 from dialogue_locator.models import (
@@ -24,6 +25,7 @@ from dialogue_locator.models import (
     FaceDetectionResult,
     MatchCandidate,
     MediaInfo,
+    MouthMovementResult,
     PipelineStage,
     ProgressEvent,
     ResultStatus,
@@ -131,6 +133,27 @@ class FakeFaceDetector:
         return FaceDetectionResult(faces=self.faces, image_width=320, image_height=240)
 
 
+def mouth_result(moving: bool | None, score: float | None = 0.09) -> MouthMovementResult:
+    return MouthMovementResult(
+        moving=moving, movement_score=score, threshold=0.02,
+        frames_analyzed=26, frames_with_face=26 if moving is not None else 2,
+        window_start=0.6, window_end=1.6,
+    )
+
+
+class FakeMouthAnalyzer:
+    def __init__(self, result: MouthMovementResult | None = None, error: Exception | None = None):
+        self.result = result or mouth_result(moving=True)
+        self.error = error
+        self.calls: list[tuple[VideoInfo, float, float]] = []
+
+    def analyze(self, video: VideoInfo, start: float, end: float) -> MouthMovementResult:
+        self.calls.append((video, start, end))
+        if self.error:
+            raise self.error
+        return self.result
+
+
 @pytest.fixture
 def settings(tmp_path: Path) -> Settings:
     return Settings(storage={"work_dir": tmp_path / "work", "output_dir": tmp_path / "out"})
@@ -144,6 +167,7 @@ def make_pipeline(
     downloader=None,
     retry_transcriber=None,
     face_detector=None,
+    mouth_analyzer=None,
 ) -> tuple[DialoguePipeline, ScriptedTranscriber]:
     tr = ScriptedTranscriber(transcript)
     p = DialoguePipeline(
@@ -153,6 +177,7 @@ def make_pipeline(
         verifiers=[] if verifiers is None else verifiers,
         retry_transcriber=retry_transcriber,
         face_detector=face_detector or FakeFaceDetector(),
+        mouth_analyzer=mouth_analyzer or FakeMouthAnalyzer(),
     )
     return p, tr
 
@@ -190,7 +215,7 @@ def test_found_end_to_end(settings, sample_video, tmp_path):
     assert tr.warmed == 1
     # timings + progress ("download" = search fetch, "download_video" = full-quality fetch)
     for stage in ("input", "download", "download_video", "audio", "transcription", "verification", "frame",
-                  "face_detection", "total"):
+                  "face_detection", "mouth_movement", "total"):
         assert stage in result.stage_timings
     stages = [e.stage for e in events]
     assert stages[0] is PipelineStage.INPUT and stages[-1] is PipelineStage.DONE
@@ -370,6 +395,76 @@ def test_no_face_detection_without_frame(settings, sample_wav):
     assert result.found and result.frame is None
     assert fd.paths == [] and result.face_detection is None
     assert "face_detection" not in result.stage_timings
+
+
+# --------------------------------------------------------------------------- #
+# mouth movement (V3)
+# --------------------------------------------------------------------------- #
+def test_mouth_moving_keeps_found(settings, sample_video):
+    ma = FakeMouthAnalyzer(mouth_result(moving=True))
+    p, _ = make_pipeline(settings, sample_video, TRANSCRIPT, mouth_analyzer=ma)
+    result = p.run(PipelineRequest(source=str(sample_video), dialogue=DIALOGUE))
+    assert result.status is ResultStatus.FOUND
+    assert result.mouth_moving is True and result.warnings == []
+    # analysed the clip over the final match window
+    video, start, end = ma.calls[0]
+    assert video is result.video and (start, end) == (result.match.start, result.match.end)
+    d = result.to_dict()
+    assert d["mouth_moving"] is True and d["mouth_movement"]["movement_score"] == 0.09
+
+
+def test_still_mouth_makes_result_not_onscreen(settings, sample_video):
+    ma = FakeMouthAnalyzer(mouth_result(moving=False, score=0.003))
+    p, _ = make_pipeline(settings, sample_video, TRANSCRIPT, mouth_analyzer=ma)
+    result = p.run(PipelineRequest(source=str(sample_video), dialogue=DIALOGUE))
+    assert result.status is ResultStatus.NOT_ONSCREEN and not result.found
+    assert result.face_present is True and result.mouth_moving is False
+    assert result.match is not None and result.frame is not None  # details kept
+    assert result.warnings == []
+
+
+def test_indeterminate_mouth_fails_open_with_warning(settings, sample_video):
+    ma = FakeMouthAnalyzer(mouth_result(moving=None, score=None))
+    p, _ = make_pipeline(settings, sample_video, TRANSCRIPT, mouth_analyzer=ma)
+    logger.info(">>> expecting a WARNING: mouth movement indeterminate, verdict kept")
+    result = p.run(PipelineRequest(source=str(sample_video), dialogue=DIALOGUE))
+    assert result.status is ResultStatus.FOUND
+    assert result.mouth_moving is None and result.mouth_movement is not None
+    assert any("could not be judged" in w for w in result.warnings)
+    logger.info("<<< warning recorded as expected")
+
+
+def test_mouth_analyzer_failure_fails_open_with_warning(settings, sample_video):
+    ma = FakeMouthAnalyzer(error=MouthMovementError("landmarker exploded"))
+    p, _ = make_pipeline(settings, sample_video, TRANSCRIPT, mouth_analyzer=ma)
+    logger.info(">>> expecting a WARNING: mouth analyzer failed, verdict kept")
+    result = p.run(PipelineRequest(source=str(sample_video), dialogue=DIALOGUE))
+    assert result.status is ResultStatus.FOUND and result.mouth_movement is None
+    assert any("Mouth check failed" in w for w in result.warnings)
+    logger.info("<<< warning recorded as expected")
+
+
+def test_no_face_skips_mouth_check(settings, sample_video):
+    ma = FakeMouthAnalyzer()
+    p, _ = make_pipeline(settings, sample_video, TRANSCRIPT,
+                         face_detector=FakeFaceDetector(faces=()), mouth_analyzer=ma)
+    result = p.run(PipelineRequest(source=str(sample_video), dialogue=DIALOGUE))
+    assert result.status is ResultStatus.NOT_ONSCREEN  # from the face gate
+    assert ma.calls == [] and result.mouth_movement is None
+    assert "mouth_movement" not in result.stage_timings
+
+
+def test_face_check_failure_skips_mouth_check(settings, sample_video):
+    # Fail-open face check leaves face_detection None: mouth check has no face
+    # confirmation to build on, so it must not run.
+    fd = FakeFaceDetector(error=FaceDetectionError("boom"))
+    ma = FakeMouthAnalyzer()
+    p, _ = make_pipeline(settings, sample_video, TRANSCRIPT, face_detector=fd, mouth_analyzer=ma)
+    logger.info(">>> expecting a WARNING: face check failed")
+    result = p.run(PipelineRequest(source=str(sample_video), dialogue=DIALOGUE))
+    assert result.status is ResultStatus.FOUND
+    assert ma.calls == [] and result.mouth_movement is None
+    logger.info("<<< warning recorded as expected")
 
 
 # --------------------------------------------------------------------------- #

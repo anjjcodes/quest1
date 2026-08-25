@@ -86,6 +86,17 @@ class FaceDetectionSchema(BaseModel):
     faces: list[FaceBoxSchema] = Field(default_factory=list)
 
 
+class MouthMovementSchema(BaseModel):
+    """V3: lip activity over the matched dialogue window."""
+
+    model_config = ConfigDict(extra="allow")
+    moving: bool | None = None
+    movement_score: float | None = None
+    threshold: float
+    frames_analyzed: int
+    frames_with_face: int
+
+
 class ResultSchema(BaseModel):
     """Mirrors ``LocalizationResult.to_dict()``."""
 
@@ -105,6 +116,10 @@ class ResultSchema(BaseModel):
         None, description="V2: set once the face check ran on the frame; None if it did not run"
     )
     face_detection: FaceDetectionSchema | None = None
+    mouth_moving: bool | None = Field(
+        None, description="V3: set once the mouth check reached a verdict; None otherwise"
+    )
+    mouth_movement: MouthMovementSchema | None = None
     near_misses: list[CandidateSchema] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
     stage_timings: dict[str, float] = Field(default_factory=dict)
