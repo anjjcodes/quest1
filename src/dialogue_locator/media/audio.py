@@ -25,6 +25,7 @@ from dialogue_locator.exceptions import AudioExtractionError
 from dialogue_locator.media.probe import ensure_binary, probe_media
 from dialogue_locator.models import (
     AudioInfo,
+    MediaInfo,
     PipelineStage,
     ProgressCallback,
     ProgressEvent,
@@ -47,32 +48,36 @@ class AudioExtractor:
     # ------------------------------------------------------------------ #
     def extract(
         self,
-        video: VideoInfo,
+        media: MediaInfo | VideoInfo,
         dest_dir: Path,
         progress: ProgressCallback | None = None,
         reuse_existing: bool = True,
     ) -> AudioInfo:
-        """Extract the full audio track of ``video`` into ``dest_dir/audio.wav``."""
+        """Extract the full audio track of ``media`` into ``dest_dir/audio.wav``.
+
+        ``media`` is normally the cheap search download (:class:`MediaInfo`,
+        possibly audio-only) but a full :class:`VideoInfo` works the same.
+        """
         ensure_binary(self._config.ffmpeg_binary)  # fail fast, before any work or logging
         dest_dir.mkdir(parents=True, exist_ok=True)
         out_path = dest_dir / _AUDIO_FILENAME
 
-        if reuse_existing and self._is_fresh(out_path, video.path):
+        if reuse_existing and self._is_fresh(out_path, media.path):
             logger.info("Reusing previously extracted audio: %s", out_path)
             return self._describe(out_path)
 
-        self._require_audio_stream(video.path)
+        self._require_audio_stream(media.path)
         logger.info(
             "Extracting audio from %s -> %s (%d Hz, %d ch)",
-            video.path.name,
+            media.path.name,
             out_path,
             self._config.sample_rate,
             self._config.channels,
         )
         self._emit(progress, "Extracting audio", 0.0, {"path": str(out_path)})
 
-        cmd = self._base_command(video.path, out_path)
-        self._run_ffmpeg(cmd, out_path, total_duration=video.duration, progress=progress)
+        cmd = self._base_command(media.path, out_path)
+        self._run_ffmpeg(cmd, out_path, total_duration=media.duration, progress=progress)
 
         info = self._describe(out_path)
         logger.info("Audio ready: %s (%.1fs)", out_path.name, info.duration or 0.0)

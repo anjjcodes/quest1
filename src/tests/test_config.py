@@ -6,7 +6,7 @@ from dialogue_locator.config import MatchingConfig, Settings, get_settings, rese
 
 def test_defaults_load():
     s = Settings()
-    assert s.whisper.fast_model == "small"
+    assert s.whisper.fast_model == "base"
     assert s.whisper.verify_model == "medium"
     assert s.matching.match_threshold == 80.0
     assert s.verification.search_window_seconds == 20.0
@@ -15,12 +15,12 @@ def test_defaults_load():
 
 def test_env_override_nested(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("DL_MATCHING__MATCH_THRESHOLD", "85")
-    monkeypatch.setenv("DL_WHISPER__FAST_MODEL", "base")
+    monkeypatch.setenv("DL_WHISPER__FAST_MODEL", "small")
     reset_settings_cache()
     try:
         s = get_settings()
         assert s.matching.match_threshold == 85.0
-        assert s.whisper.fast_model == "base"
+        assert s.whisper.fast_model == "small"
     finally:
         reset_settings_cache()
 

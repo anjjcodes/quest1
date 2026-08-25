@@ -6,7 +6,7 @@ schemas; the CLI prints them directly.
 
 Data flow between stages::
 
-    Downloader        -> VideoInfo
+    Downloader        -> MediaInfo (search fetch) / VideoInfo (full-quality fetch)
     AudioExtractor    -> AudioInfo
     Transcriber       -> Iterator[Word]                (streamed)
     Matcher           -> MatchCandidate | near-miss list
@@ -45,10 +45,11 @@ class PipelineStage(str, Enum):
     """Names of the pipeline stages, used in progress events, logs and errors."""
 
     INPUT = "input"
-    DOWNLOAD = "download"
+    DOWNLOAD = "download"  # cheap search fetch (audio-only if possible)
     AUDIO = "audio"
     TRANSCRIPTION = "transcription"
     MATCHING = "matching"
+    DOWNLOAD_VIDEO = "download_video"  # full-quality fetch, only after a match
     VERIFICATION = "verification"
     FRAME = "frame"
     DONE = "done"
@@ -59,7 +60,13 @@ class PipelineStage(str, Enum):
 # --------------------------------------------------------------------------- #
 @dataclass(frozen=True)
 class VideoInfo:
-    """A downloaded (or local) video file and its probed properties."""
+    """A downloaded (or local) video file and its probed properties.
+
+    May be a *clip* of the source rather than the whole video: ``clip_start``
+    is how many seconds into the source this file begins (0.0 for a full
+    video). Absolute source timestamps map to ``t - clip_start`` in the file;
+    ``duration`` / ``frame_count`` describe the file, not the source.
+    """
 
     path: Path
     source_url: str
@@ -69,6 +76,28 @@ class VideoInfo:
     width: int | None = None
     height: int | None = None
     frame_count: int | None = None
+    clip_start: float = 0.0
+
+    def to_dict(self) -> dict[str, Any]:
+        data = asdict(self)
+        data["path"] = str(self.path)
+        return data
+
+
+@dataclass(frozen=True)
+class MediaInfo:
+    """The cheap search-pass download: audio-only when the host offers it.
+
+    Feeds audio extraction and transcription only. The full-quality
+    :class:`VideoInfo` is fetched separately, after a match is confirmed,
+    for frame extraction.
+    """
+
+    path: Path
+    source_url: str
+    title: str | None = None
+    duration: float | None = None  # seconds
+    has_video: bool = False  # False for audio-only downloads
 
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)

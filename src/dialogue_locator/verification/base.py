@@ -7,10 +7,12 @@ one sees the candidate as refined by the previous ones.
 
 Version 1 ships one verifier (:class:`~dialogue_locator.verification.asr_verifier.AsrVerifier`,
 a larger Whisper model over a short window). Version 2's visual "is the speaker
-on camera" check plugs in here as another :class:`Verifier` subclass - it
-gets ``context.video.path`` and the candidate's time range, and can return a
-``refined`` candidate whose ``start`` is the first frame the speaker is visible.
-Nothing upstream (download, transcription, matching) needs to change.
+on camera" check plugs in here as another :class:`Verifier` subclass. Note that
+verification runs before any video is downloaded (``context.video`` is None for
+URL sources); a visual verifier should fetch its own clip on demand via
+``VideoDownloader.fetch_video_clip`` (cheap - a few seconds around the
+candidate) and can return a ``refined`` candidate whose ``start`` is the first
+frame the speaker is visible. Nothing upstream needs to change.
 """
 
 from __future__ import annotations

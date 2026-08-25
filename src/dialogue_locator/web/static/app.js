@@ -3,10 +3,10 @@
   "use strict";
 
   const $ = (id) => document.getElementById(id);
-  const STAGES = ["input", "download", "audio", "transcription", "verification", "frame"];
+  const STAGES = ["input", "download", "audio", "transcription", "verification", "download_video", "frame"];
   const POLL_MS = 1000;
   const MAX_POLL_FAILURES = 5;
-  const TIMING_COLORS = { input: "#94a3b8", download: "#60a5fa", audio: "#34d399", transcription: "#f59e0b", matching: "#f59e0b", verification: "#a78bfa", frame: "#f472b6" };
+  const TIMING_COLORS = { input: "#94a3b8", download: "#60a5fa", audio: "#34d399", transcription: "#f59e0b", matching: "#f59e0b", download_video: "#3b82f6", verification: "#a78bfa", frame: "#f472b6" };
 
   const els = {
     form: $("job-form"), source: $("source"), dialogue: $("dialogue"), reuse: $("reuse"),
@@ -146,7 +146,7 @@
       li.className = "";
       const meta = li.querySelector(".meta");
       if (timings[s] != null) meta.textContent = fmtSecs(timings[s]);
-      if (notFound && (s === "verification" || s === "frame")) { li.classList.add("skipped"); meta.textContent = "skipped"; continue; }
+      if (notFound && (s === "download_video" || s === "verification" || s === "frame")) { li.classList.add("skipped"); meta.textContent = "skipped"; continue; }
       if (job.status === "done" || (stage === "done" && job.status === "running")) li.classList.add("done");
       else if (i < idx) li.classList.add("done");
       else if (i === idx) li.classList.add(finished ? "failed" : "active");

@@ -1,0 +1,239 @@
+PROMPTS USED TO BUILD THIS PROJECT
+===================================
+
+Prompt 0:
+
+Think of yourself as a senior Python developer and software architect. Write clean, modular,
+maintainable, production-ready code with clear separation of concerns, following industry best
+practices and designing the application so it can be easily extended in future versions.
+I will give you the approach for a problem statement, and you need to build a complete frontend
+and backend application using **FastAPI and HTML/CSS**. Keep the code highly modular and
+maintainable. Do not put the entire logic into a single file or a single API endpoint. Separate
+the video processing, transcription, matching, verification, frame extraction, API routes,
+configuration, and frontend logic into appropriate modules.
+In the problem statement, the input is a YouTube video link or any equivalent source, and an
+on-screen dialogue text is given. On-screen dialogue is basically when the character should be
+on camera while saying the dialogue. I found out many edge cases for this as well.
+My first approach was downloading the video locally, converting the whole audio to text, and
+then using fuzzy matching to find out whether the transcription matches the given dialogue and
+get that frame. But if the video is too long, like the one given in the PS, which is 55 minutes,
+it will take a long time to transcribe everything.
+So what I did is, instead of transcribing the whole audio first, I stream the transcription.
+Faster-Whisper gives the transcribed segments one by one as it decodes, so after every segment,
+I fuzzy-match the words we have so far against the given dialogue and stop as soon as the first
+match is found. So if the dialogue is at 5 minutes, only 5 minutes of audio gets transcribed,
+not 55.
+There is no application-level chunking needed because we process the transcription as a
+continuous stream of timestamped words. This allows the dialogue to span across multiple
+Faster-Whisper segments without being affected by artificial chunk boundaries.
+First, the audio is extracted from the video, then it is streamed through a small
+Faster-Whisper model with word-level timestamps.
+For matching, I slide a window over the transcribed words. The window size is based on the
+dialogue word count, with a tolerance of plus or minus 2 words to handle cases where the ASR
+model splits or merges words. Each window is scored using fuzzy ratio.
+Since we are using a small model, some words can be transcribed incorrectly. So if the match
+score is 80 or above, I treat it as a candidate and run a larger Whisper model only on a
+±20-second window around that point to confirm the text and tighten the word timestamps.
+If the larger model also matches, meaning its score is not more than 5 points below the first
+score, I take its timestamp. Otherwise, I keep the first timestamp and note a warning.
+Then, the timestamp of the first word is converted to a frame number and that frame is saved as
+an image.
+The output should contain:
+
+* Timestamp
+* Frame number
+* Matched dialogue text
+* Corresponding video frame as image
+
+If the same dialogue occurs more than once, the earliest valid occurrence is taken as the answer
+since we want the first appearance.
+
+If nothing matches above the threshold, it should report the 3 closest matching windows with
+their scores so we can see whether the dialogue text or the video is wrong.
+
+This is **Version 1**.
+
+For Version 1, focus on accurately implementing the **spoken dialogue localization and frame
+extraction pipeline**. Do not try to solve the visual "character is on camera" verification yet.
+The visual on-screen validation will be added as a separate stage in a future version, so design
+the architecture in a way that allows this to be added without significantly modifying the
+existing transcription and matching pipeline.
+
+### Technical requirements
+
+Use the following technologies where appropriate:
+
+* **Python**
+* **FastAPI** for the backend/API
+* **HTML/CSS/JavaScript** for the frontend
+* **yt-dlp** for downloading YouTube videos
+* **FFmpeg** for audio extraction and video/frame processing
+* **Faster-Whisper** for transcription
+* **RapidFuzz** for fuzzy matching
+* **OpenCV** for video/frame handling where appropriate
+
+Keep configuration such as Whisper models, fuzzy-match threshold, verification threshold, and
+search window size configurable rather than hardcoded throughout the code.
+
+The application should provide a clean web interface where the user can enter the video URL and
+target dialogue, start processing, see the processing status/progress, and view the final result
+including the extracted frame and metadata.
+
+Design the backend so that the core dialogue detection pipeline is independent of the FastAPI
+routes. The pipeline should be callable independently and should not contain frontend-specific
+logic.
+
+Also make sure errors are handled properly, including invalid URLs, failed downloads, unsupported
+videos, audio extraction failures, transcription failures, invalid dialogue input, and cases
+where no match is found.
+
+Use proper logging throughout the pipeline so that it is easy to debug and monitor the
+processing stages.
+
+Most importantly, **do not just make the application work as a single script**. Structure it
+like a real maintainable Python project, with clear separation of responsibilities and
+interfaces between components, because I will extend this into Version 2 with visual
+speaker/on-screen validation later.
+Keep evrything in /src.
+Go step by step, implementing each module sequentially so that I can run and test each part
+independently and build unit tests for each module.
+
+Each time you implement a module or file, stop and ask me for confirmation. Do not assume,
+guess, or proceed to the next module without my approval. For every module, show me the
+complete file, explain the design decisions and reasoning behind the implementation, and tell
+me how I can run and test it. Only continue to the next module after I explicitly approve the
+current one.
+dont add or commit to git by yourself. ill do that part after testing and verifying.
+
+How the session was run
+-----------------------
+Prompt 0 above was pasted into Claude Code (Anthropic, Claude Fable 5) in VS Code on 2026-08-24.
+Because it asked for one module at a time with explicit approval, most of the later prompts are
+short: an approval to move to the next module, or a correction/question about what had just
+been shown. They are reproduced below verbatim, in order, exactly as typed (typos included), so
+they match the session transcript. Long error/log pastes are shortened with "(...)".
+Text in [brackets] is added here for context only and was not part of the prompt.
+Every commit was made by hand after testing each step.
+
+
+Prompt 1:  [after Step 1: scaffold, config.py, exceptions.py, logging_config.py]
+okay approve
+continue
+
+Prompt 2:  [after Step 2: models.py]
+approve
+
+Prompt 3:  [after Step 3: media/probe.py, media/downloader.py]
+approve
+
+Prompt 4:  [after Step 4: media/audio.py]
+generate tests and unit tests to verify media classes, unit tests and sample test scripts that
+imports and uses these class files
+
+Prompt 5:  [after the test suite for config/models/probe/downloader/audio was added]
+approve
+
+Prompt 6:
+give logs for tests, i want clear visiblity on whats going on
+
+Prompt 7:  [pasted from the live test log]
+21:43:55.588 INFO    dialogue_locator.transcription.faster_whisper: [faster_whisper:fake-small]
+transcribing 1.0s of audio (offset 0.00s, lang=en, beam=5, vad=True)
+21:43:55.588 ERROR   dialogue_locator.transcription.faster_whisper: [faster_whisper:fake-small]
+failed to start decoding: bad options
+PASSED
+
+dialouge locator faster whister is failing the tests look into itm i think there is a decoding issue.
+
+Prompt 8:  [pasted from the live test log]
+21:45:02.109 INFO    tests: >>> expecting ConfigurationError (an ERROR line below is the code
+under test rejecting bad input)
+21:45:02.183 INFO    dialogue_locator.media.audio: Extracting audio from sample.mp4 -> (...)
+21:45:02.184 ERROR   dialogue_locator.media.probe: Required binary 'ffmpeg-does-not-exist' not
+found on PATH
+21:45:02.184 INFO    tests: <<< got ConfigurationError as expected: (...)
+PASSED
+
+again ffmpeg error for dialouge locator test.
+
+Prompt 9:
+i think we need to do the same analysis and checks on other tests, cause i can see other tests like media tests with similar errors.
+
+Prompt 10:  [answering a question about the deleted src/examples/ directory]
+was deleting src/examples/ intentional? yes
+
+Prompt 11:  [after Step 5: transcription/base.py, transcription/faster_whisper.py]
+approve
+
+Prompt 12:  [after Step 6: matching/normalize.py, matching/matcher.py]
+approve
+
+Prompt 13:  [Step 7 was started, interrupted, and resumed]
+continue
+
+Prompt 14:  [after Step 7: verification/base.py, verification/asr_verifier.py]
+approve
+
+Prompt 15:  [after Step 8: media/frames.py]
+approve
+
+Prompt 16:  [after Step 9: pipeline/pipeline.py, cli.py, first real runs]
+okay do it, lets have with clear logs
+
+Prompt 18:  [after Step 10: api/]
+yes, make sure its job based approch.
+
+Prompt 19:  [pasted from the web UI after running the problem-statement video]
+3. Result
+Failed during download: Download failed: [Odnoklassniki] 248244667877: Unable to download
+webpage: [Errno 54] Connection reset by peer (caused by TransportError('[Errno 54] Connection
+reset by peer'))
+(...)
+there is a connection error, we need a fall back for it.
+
+Prompt 20:  [pasted from the web UI]
+2. Processing #f49a1df7b595
+(...)
+download: Downloading 0% 0%
+
+Event log
+23:27:30 input Validating input 0%
+23:27:30 download Fetching video 0%
+23:27:30 download Starting download 0%
+23:27:41 download Downloading 0% 0%
+(...)
+
+html is not shwoing the progress in downloads, i can see backend working properly its a frontend issue.
+
+Prompt 21:
+give end script to run the backend
+
+Prompt 22:  [pasted from the web UI after restarting the server]
+2. Processing #f49a1df7b595
+(...)
+Lost contact with job: "Job f49a1df7b595 not found"
+
+Event log
+
+if a job is not found, cause its in memory, remove the job from in memeory in the frontend.
+
+Prompt 23:  [making "base" the default streaming model]
+okay make base/lowest wispher model as  default
+
+Prompt 24:
+make the UI html proper, its so bad (errors in showing progress, no fall backs and no proper layout), for now one shot the frontend and once done create docs/ for docs to whole codebase
+mainly in src/ explain each and everything properly so that future we can refer that
+
+Prompt 25:  [sent while the UI was being redesigned]
+keep it in light theame and big fonts
+
+
+Prompt 25: [optimise the download time]
+instead of downloading whole video in high quality lets load the audio or lowest video quality present and then once we find the fuzzy matching chucks for each chuck while before starting verification well download the highest quality video, do i think we should modify as such in the code-base
+
+Prompt 26: [corrections in claude implementation plan]
+
+i think now max height from config doesnt need, cause we are going to search audio itself right, no need to cap heights.
+
+Prompt 27:
+only after verify the clip with high wispher model we should go download only that clip, beacuse this then reduces downloading whole clip from 55mins to 6sec per clip.

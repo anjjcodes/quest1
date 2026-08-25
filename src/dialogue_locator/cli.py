@@ -101,7 +101,7 @@ def format_result(result: LocalizationResult) -> str:
 
 def _progress_printer(event: ProgressEvent) -> None:
     pct = "" if event.fraction is None else f" {event.fraction:4.0%}"
-    print(f"  [{event.stage.value:>13}]{pct}  {event.message}", file=sys.stderr, flush=True)
+    print(f"  [{event.stage.value:>14}]{pct}  {event.message}", file=sys.stderr, flush=True)
 
 
 def main(argv: list[str] | None = None, pipeline_factory=DialoguePipeline) -> int:

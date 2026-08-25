@@ -1,14 +1,23 @@
-"""Fetch the source video.
+"""Fetch the source media.
 
 Two inputs are accepted:
 
 * an ``http(s)`` URL supported by yt-dlp (YouTube, ok.ru, Vimeo, direct .mp4 ...)
 * a path to a local video file (handy for tests and offline runs)
 
-Either way the result is a :class:`~dialogue_locator.models.VideoInfo` whose
-``path`` points at a local, seekable file and whose fps / duration / frame
-count come from ffprobe rather than from the site's metadata (which is often
-missing or rounded).
+Two fetches are offered:
+
+* :meth:`VideoDownloader.fetch_search_media` - the cheap pass that feeds
+  transcription: audio-only when the host offers it, else the lowest video
+  rendition under ``search_max_height``. Returns a
+  :class:`~dialogue_locator.models.MediaInfo` (which may have no video stream).
+* :meth:`VideoDownloader.fetch` - the full-quality video (capped at
+  ``max_height``), needed only for frame extraction once a match is confirmed.
+  Returns a :class:`~dialogue_locator.models.VideoInfo`.
+
+For a local file both methods resolve to the same file. Media properties
+(fps / duration / frame count) come from ffprobe rather than from the site's
+metadata (which is often missing or rounded).
 """
 
 from __future__ import annotations
@@ -20,17 +29,18 @@ from urllib.parse import urlparse
 
 import yt_dlp
 from yt_dlp.utils import DownloadError as YtDlpDownloadError
-from yt_dlp.utils import ExtractorError, UnsupportedError
+from yt_dlp.utils import ExtractorError, UnsupportedError, download_range_func
 
 from dialogue_locator.config import DownloadConfig
 from dialogue_locator.exceptions import DownloadError, InvalidURLError, UnsupportedVideoError
 from dialogue_locator.media.probe import probe_media
-from dialogue_locator.models import PipelineStage, ProgressCallback, ProgressEvent, VideoInfo
+from dialogue_locator.models import MediaInfo, PipelineStage, ProgressCallback, ProgressEvent, VideoInfo
 
 logger = logging.getLogger(__name__)
 
 _ALLOWED_SCHEMES = ("http", "https")
-_OUTPUT_STEM = "video"
+_VIDEO_STEM = "video"  # full-quality fetch, cached per source
+_MEDIA_STEM = "media"  # cheap search fetch, cached separately (different format)
 
 
 def is_url(source: str) -> bool:
@@ -80,7 +90,7 @@ class VideoDownloader:
         progress: ProgressCallback | None = None,
         reuse_existing: bool = True,
     ) -> VideoInfo:
-        """Obtain the video for ``source`` and return its :class:`VideoInfo`.
+        """Obtain the full-quality video for ``source`` and return its :class:`VideoInfo`.
 
         Args:
             source: http(s) URL or local file path.
@@ -89,19 +99,94 @@ class VideoDownloader:
             reuse_existing: if a previous download exists in ``dest_dir``, use it
                 instead of re-downloading (speeds up repeated runs on one video).
         """
+        path, title = self._obtain(source, dest_dir, progress, reuse_existing,
+                                   fmt=self._video_format(), stem=_VIDEO_STEM, label="video")
+        return self._describe(path, source, title)
+
+    def fetch_search_media(
+        self,
+        source: str,
+        dest_dir: Path,
+        progress: ProgressCallback | None = None,
+        reuse_existing: bool = True,
+    ) -> MediaInfo:
+        """Obtain the cheap search-pass media for ``source`` (audio-only if possible).
+
+        Same arguments as :meth:`fetch`. For URLs this downloads the best
+        audio-only stream, falling back to the lowest video rendition under
+        ``search_max_height`` on hosts without separate audio streams. For a
+        local file it resolves the file itself. Raises
+        ``UnsupportedVideoError`` if the result has no audio stream, since
+        there is then no dialogue to search.
+        """
+        path, title = self._obtain(source, dest_dir, progress, reuse_existing,
+                                   fmt=self._search_format(), stem=_MEDIA_STEM, label="audio")
+        return self._describe_media(path, source, title)
+
+    def fetch_video_clip(
+        self,
+        source: str,
+        start: float,
+        end: float,
+        dest_dir: Path,
+        progress: ProgressCallback | None = None,
+        reuse_existing: bool = True,
+    ) -> VideoInfo:
+        """Download only ``[start, end]`` (padded by ``clip_padding_seconds``)
+        of ``source`` at full quality, for frame extraction around a verified
+        match. Far cheaper than :meth:`fetch` on long videos.
+
+        The cut is re-encoded to start exactly at the padded start, so the
+        returned ``VideoInfo.clip_start`` maps source timestamps precisely.
+        A local file is already on disk in full, so it is returned whole
+        (``clip_start`` 0.0).
+        """
+        if end <= start:
+            raise DownloadError(
+                f"Invalid clip range: start={start:.3f} must be < end={end:.3f}",
+                details={"start": start, "end": end},
+            )
+        source = (source or "").strip()
+        if not source:
+            logger.warning("Rejected input: empty video source")
+            raise InvalidURLError("Video source is empty.")
+        if not is_url(source):
+            path = self._resolve_local(source)
+            return self._describe(path, source, path.stem)
+
+        pad = self._config.clip_padding_seconds
+        clip_start = max(0.0, float(start) - pad)
+        clip_end = float(end) + pad
+        stem = f"clip_{int(clip_start * 1000)}_{int(clip_end * 1000)}"
+        path = self._download(
+            validate_url(source), dest_dir, progress, reuse_existing,
+            fmt=self._video_format(), stem=stem, label="video clip",
+            section=(clip_start, clip_end),
+        )
+        return self._describe(path, source, self._last_title, clip_start=clip_start)
+
+    def _obtain(
+        self,
+        source: str,
+        dest_dir: Path,
+        progress: ProgressCallback | None,
+        reuse_existing: bool,
+        *,
+        fmt: str,
+        stem: str,
+        label: str,
+    ) -> tuple[Path, str | None]:
         source = (source or "").strip()
         if not source:
             logger.warning("Rejected input: empty video source")
             raise InvalidURLError("Video source is empty.")
 
         if is_url(source):
-            path = self._download(validate_url(source), dest_dir, progress, reuse_existing)
-            title = self._last_title
-        else:
-            path = self._resolve_local(source)
-            title = path.stem
-
-        return self._describe(path, source, title)
+            path = self._download(validate_url(source), dest_dir, progress, reuse_existing,
+                                  fmt=fmt, stem=stem, label=label)
+            return path, self._last_title
+        path = self._resolve_local(source)
+        return path, path.stem
 
     # ------------------------------------------------------------------ #
     # Local file
@@ -121,29 +206,51 @@ class VideoDownloader:
     # ------------------------------------------------------------------ #
     # yt-dlp
     # ------------------------------------------------------------------ #
-    def _existing_download(self, dest_dir: Path) -> Path | None:
-        candidates = sorted(dest_dir.glob(f"{_OUTPUT_STEM}.*"))
+    def _video_format(self) -> str:
+        h = self._config.max_height
+        ext = self._config.container
+        # Prefer a single progressive stream (no merge needed), else merge best
+        # video+audio under the height cap, else anything under the cap, else best.
+        return (
+            f"best[height<={h}][ext={ext}]/"
+            f"bestvideo[height<={h}][ext={ext}]+bestaudio[ext=m4a]/"
+            f"bestvideo[height<={h}]+bestaudio/"
+            f"best[height<={h}]/best"
+        )
+
+    def _search_format(self) -> str:
+        h = self._config.search_max_height
+        # Audio-only if the host offers it; otherwise the smallest combined
+        # (video+audio) rendition; 'worst*[acodec!=none]' as a last resort
+        # covers hosts whose only small formats are not combined.
+        return (
+            "bestaudio[ext=m4a]/"
+            "bestaudio/"
+            f"worst[height<={h}]/"
+            "worst/"
+            "worst*[acodec!=none]"
+        )
+
+    def _existing_download(self, dest_dir: Path, stem: str) -> Path | None:
+        candidates = sorted(dest_dir.glob(f"{stem}.*"))
         # yt-dlp leaves .part / .ytdl files behind on interrupted downloads.
         candidates = [
             p for p in candidates if p.suffix not in (".part", ".ytdl") and p.stat().st_size > 0
         ]
         return candidates[0] if candidates else None
 
-    def _ydl_options(self, dest_dir: Path, progress: ProgressCallback | None) -> dict[str, Any]:
-        h = self._config.max_height
-        ext = self._config.container
-        # Prefer a single progressive stream (no merge needed), else merge best
-        # video+audio under the height cap, else anything under the cap, else best.
-        fmt = (
-            f"best[height<={h}][ext={ext}]/"
-            f"bestvideo[height<={h}][ext={ext}]+bestaudio[ext=m4a]/"
-            f"bestvideo[height<={h}]+bestaudio/"
-            f"best[height<={h}]/best"
-        )
+    def _ydl_options(
+        self,
+        dest_dir: Path,
+        progress: ProgressCallback | None,
+        fmt: str,
+        stem: str,
+        section: tuple[float, float] | None = None,
+    ) -> dict[str, Any]:
         opts: dict[str, Any] = {
             "format": fmt,
-            "merge_output_format": ext,
-            "outtmpl": str(dest_dir / f"{_OUTPUT_STEM}.%(ext)s"),
+            "merge_output_format": self._config.container,
+            "outtmpl": str(dest_dir / f"{stem}.%(ext)s"),
             "noplaylist": True,
             "quiet": True,
             "no_warnings": True,
@@ -154,6 +261,12 @@ class VideoDownloader:
             "logger": _YtDlpLoggerAdapter(),
             "progress_hooks": [self._make_progress_hook(progress)],
         }
+        if section is not None:
+            opts["download_ranges"] = download_range_func(None, [section])
+            # Re-encode the cut so the clip begins exactly at section[0]; without
+            # this the clip starts at the previous keyframe and clip_start would
+            # be wrong, breaking the timestamp -> frame mapping.
+            opts["force_keyframes_at_cuts"] = True
         return opts
 
     def _download(
@@ -162,19 +275,24 @@ class VideoDownloader:
         dest_dir: Path,
         progress: ProgressCallback | None,
         reuse_existing: bool,
+        *,
+        fmt: str,
+        stem: str,
+        label: str,
+        section: tuple[float, float] | None = None,
     ) -> Path:
         dest_dir.mkdir(parents=True, exist_ok=True)
         self._last_title = None
 
-        if reuse_existing and (existing := self._existing_download(dest_dir)):
-            logger.info("Reusing previously downloaded video: %s", existing)
+        if reuse_existing and (existing := self._existing_download(dest_dir, stem)):
+            logger.info("Reusing previously downloaded %s: %s", label, existing)
             return existing
 
-        logger.info("Downloading %s (max height %dp) -> %s", url, self._config.max_height, dest_dir)
-        self._emit(progress, "Starting download", 0.0, {"url": url})
+        logger.info("Downloading %s (%s, format %r) -> %s", url, label, fmt, dest_dir)
+        self._emit(progress, f"Starting {label} download", 0.0, {"url": url, "kind": label})
 
         try:
-            with yt_dlp.YoutubeDL(self._ydl_options(dest_dir, progress)) as ydl:
+            with yt_dlp.YoutubeDL(self._ydl_options(dest_dir, progress, fmt, stem, section)) as ydl:
                 info = ydl.extract_info(url, download=True)
                 if info is None:
                     raise DownloadError("yt-dlp returned no information for the URL.", details={"url": url})
@@ -262,7 +380,7 @@ class VideoDownloader:
     # ------------------------------------------------------------------ #
     # Describe
     # ------------------------------------------------------------------ #
-    def _describe(self, path: Path, source: str, title: str | None) -> VideoInfo:
+    def _describe(self, path: Path, source: str, title: str | None, clip_start: float = 0.0) -> VideoInfo:
         probe = probe_media(path, self._ffprobe)
         if not probe.has_video:
             logger.error("No video stream in %s", path)
@@ -278,6 +396,7 @@ class VideoDownloader:
             width=probe.width,
             height=probe.height,
             frame_count=probe.frame_count,
+            clip_start=clip_start,
         )
         logger.info(
             "Video ready: %s | %.1fs | %sx%s @ %.3f fps | ~%s frames | audio=%s",
@@ -288,6 +407,29 @@ class VideoDownloader:
             info.fps or 0.0,
             info.frame_count,
             probe.has_audio,
+        )
+        return info
+
+    def _describe_media(self, path: Path, source: str, title: str | None) -> MediaInfo:
+        probe = probe_media(path, self._ffprobe)
+        if not probe.has_audio:
+            logger.error("No audio stream in %s; nothing to search", path)
+            raise UnsupportedVideoError(
+                f"File has no audio stream, so the dialogue cannot be searched: {path.name}",
+                details={"path": str(path)},
+            )
+        info = MediaInfo(
+            path=path,
+            source_url=source,
+            title=title,
+            duration=probe.duration,
+            has_video=probe.has_video,
+        )
+        logger.info(
+            "Search media ready: %s | %.1fs | video=%s",
+            path.name,
+            info.duration or 0.0,
+            info.has_video,
         )
         return info
 

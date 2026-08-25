@@ -240,3 +240,14 @@ def test_retention_expires_finished_jobs(settings, fake):
 def test_openapi_lists_routes(client):
     paths = client.get("/openapi.json").json()["paths"]
     assert {"/api/jobs", "/api/jobs/{job_id}", "/api/jobs/{job_id}/frame", "/api/health"} <= set(paths)
+
+
+# --------------------------------------------------------------------------- #
+# web UI is served
+# --------------------------------------------------------------------------- #
+def test_web_ui_served(client):
+    r = client.get("/")
+    assert r.status_code == 200 and r.headers["content-type"].startswith("text/html")
+    assert "Dialogue Locator" in r.text and '/static/app.js' in r.text
+    assert client.get("/static/app.js").status_code == 200
+    assert client.get("/static/app.css").status_code == 200

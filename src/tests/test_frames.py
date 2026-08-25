@@ -57,6 +57,18 @@ def test_extract_frame_png(sample_video: Path, tmp_path: Path):
     assert cv2.imread(str(info.image_path)).shape == (240, 320, 3)
 
 
+def test_extract_from_clip_maps_absolute_timestamp(sample_video: Path, tmp_path: Path):
+    # Treat the 3s sample as a clip beginning at 10.0s of a longer source:
+    # absolute 11.5s lives at 1.5s inside the file, but reporting stays absolute.
+    ex = FrameExtractor(FrameConfig(image_format="png"))
+    clip = ex.extract(_video(sample_video, clip_start=10.0), 11.5, tmp_path / "clip")
+    assert clip.frame_number == 287  # floor(11.48 * 25): absolute numbering
+    assert clip.timestamp == pytest.approx(10.0 + 37 / 25)
+    # same pixels as extracting 1.5s from the file directly
+    full = ex.extract(_video(sample_video), 1.5, tmp_path / "full")
+    assert (cv2.imread(str(clip.image_path)) == cv2.imread(str(full.image_path))).all()
+
+
 def test_different_timestamps_give_different_frames(sample_video: Path, tmp_path: Path):
     ex = FrameExtractor(FrameConfig(image_format="png"))
     a = ex.extract(_video(sample_video), 0.0, tmp_path / "a")

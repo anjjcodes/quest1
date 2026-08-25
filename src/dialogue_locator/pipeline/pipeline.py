@@ -3,13 +3,22 @@
 Stages, in order (each maps to a :class:`PipelineStage`)::
 
     input          validate dialogue + source           (fails before any download)
-    download       VideoDownloader   -> VideoInfo
+    download       VideoDownloader.fetch_search_media -> MediaInfo (audio-only if possible)
     audio          AudioExtractor    -> AudioInfo, PCM samples in memory
     transcription  fast Transcriber  -> Word stream   \\  consumed together: the matcher
     matching       StreamingMatcher  -> MatchCandidate /  stops the stream at the first match
     verification   Verifier chain    -> VerificationOutcome per verifier (refines or warns)
+    download_video VideoDownloader.fetch_video_clip -> VideoInfo (a few seconds of
+                   full-quality video around the *verified* timestamp)
     frame          FrameExtractor    -> FrameInfo (image on disk)
     done
+
+The search stages run on a cheap audio-first download; full-quality video is
+downloaded only as a short clip around the verified match (so a NOT_FOUND job
+never pays for a video download, and a FOUND job pays only for a few seconds).
+Verification is audio-only in V1, so it runs before any video exists; a V2
+visual verifier should fetch its own clip on demand (``fetch_video_clip`` is
+cheap) rather than expect ``context.video``.
 
 The pipeline knows nothing about FastAPI or HTML: it takes a
 :class:`PipelineRequest`, reports through a :data:`ProgressCallback`, and
@@ -48,6 +57,7 @@ from dialogue_locator.models import (
     ProgressEvent,
     ResultStatus,
     VerificationStatus,
+    VideoInfo,
     format_timestamp,
 )
 from dialogue_locator.transcription.base import Transcriber, load_pcm
@@ -190,9 +200,9 @@ class _Run:
         target: TargetDialogue = matcher.target
         self._end(PipelineStage.INPUT)
 
-        # ---- download -----------------------------------------------------
-        self._begin(PipelineStage.DOWNLOAD, "Fetching video")
-        video = self.p.downloader.fetch(
+        # ---- download (cheap search media) --------------------------------
+        self._begin(PipelineStage.DOWNLOAD, "Fetching audio for search")
+        media = self.p.downloader.fetch_search_media(
             self.req.source, self.work_dir, progress=self.progress, reuse_existing=self.req.reuse_cached_media
         )
         self._end(PipelineStage.DOWNLOAD)
@@ -201,7 +211,7 @@ class _Run:
         # ---- audio --------------------------------------------------------
         self._begin(PipelineStage.AUDIO, "Extracting audio")
         audio = self.p.audio_extractor.extract(
-            video, self.work_dir, progress=self.progress, reuse_existing=self.req.reuse_cached_media
+            media, self.work_dir, progress=self.progress, reuse_existing=self.req.reuse_cached_media
         )
         samples = load_pcm(audio.path, self.settings.audio.sample_rate)
         self._end(PipelineStage.AUDIO)
@@ -233,7 +243,7 @@ class _Run:
             status=ResultStatus.FOUND if match else ResultStatus.NOT_FOUND,
             dialogue=target.raw,
             source_url=self.req.source,
-            video=video,
+            video=None,  # full-quality video is fetched only after a match
             first_pass=match,
             match=match,
             near_misses=matcher.near_misses,
@@ -258,14 +268,14 @@ class _Run:
         )
         self._check_cancel()
 
-        # ---- verification -------------------------------------------------
+        # ---- verification (audio-only; the video clip does not exist yet) --
         self._begin(PipelineStage.VERIFICATION, "Verifying with larger model")
         context = VerificationContext(
             dialogue=target.raw,
             audio_samples=samples,
             audio_path=audio.path,
             sample_rate=self.settings.audio.sample_rate,
-            video=video,
+            video=None,
         )
         current = match
         for verifier in self.p.verifiers:
@@ -287,12 +297,36 @@ class _Run:
             self._check_cancel()
         result.match = current
         self._end(PipelineStage.VERIFICATION)
+        self._check_cancel()
 
-        # ---- frame --------------------------------------------------------
-        self._begin(PipelineStage.FRAME, "Extracting frame")
-        self.output_dir.mkdir(parents=True, exist_ok=True)
-        result.frame = self.p.frame_extractor.extract(video, current.start, self.output_dir / FRAME_FILENAME)
-        self._end(PipelineStage.FRAME)
+        # ---- download (video clip around the verified match) --------------
+        # Only now is the timestamp final, so only these few seconds of full-
+        # quality video are downloaded. A local audio-only source can be
+        # searched but has no frames to offer; a URL always gets the clip (its
+        # search media may be audio-only even though the source has video).
+        if is_url(self.req.source) or media.has_video:
+            self._begin(PipelineStage.DOWNLOAD_VIDEO, "Fetching video clip")
+            video: VideoInfo = self.p.downloader.fetch_video_clip(
+                self.req.source,
+                current.start,
+                current.end,
+                self.work_dir,
+                progress=self._retag(PipelineStage.DOWNLOAD_VIDEO),
+                reuse_existing=self.req.reuse_cached_media,
+            )
+            self._end(PipelineStage.DOWNLOAD_VIDEO)
+            result.video = video
+            self._check_cancel()
+
+            # ---- frame ----------------------------------------------------
+            self._begin(PipelineStage.FRAME, "Extracting frame")
+            self.output_dir.mkdir(parents=True, exist_ok=True)
+            result.frame = self.p.frame_extractor.extract(video, current.start, self.output_dir / FRAME_FILENAME)
+            self._end(PipelineStage.FRAME)
+        else:
+            warning = "Source has no video stream; returning the timestamp without a frame."
+            self.warnings.append(warning)
+            logger.warning(warning)
         return result
 
     # ------------------------------------------------------------------ #
@@ -305,6 +339,20 @@ class _Run:
     def _end(self, stage: PipelineStage) -> None:
         self.timings[stage.value] = time.perf_counter() - self._stage_t0
         logger.info("---- [%s] done in %.2fs", stage.value, self.timings[stage.value])
+
+    def _retag(self, stage: PipelineStage) -> ProgressCallback | None:
+        """Progress callback that re-labels events with ``stage``.
+
+        The downloader always emits DOWNLOAD events; the second (full-quality)
+        fetch should surface as DOWNLOAD_VIDEO to progress consumers.
+        """
+        if self.progress is None:
+            return None
+
+        def relay(event: ProgressEvent) -> None:
+            self.progress(ProgressEvent(stage, event.message, event.fraction, event.details))
+
+        return relay
 
     def _emit(self, stage: PipelineStage, message: str, fraction: float | None, details: dict[str, Any]) -> None:
         if self.progress is not None:

@@ -24,13 +24,33 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class DownloadConfig(BaseModel):
-    """Settings for fetching the source video (yt-dlp)."""
+    """Settings for fetching the source media (yt-dlp).
+
+    Two fetches happen per job: a cheap *search* fetch (audio-only when the
+    host offers it) that feeds transcription/matching/verification, and a
+    *video* fetch at full quality that happens only after a match is confirmed
+    and exists solely to extract the output frame.
+    """
 
     max_height: int = Field(
-        720,
+        1080,
         ge=144,
-        description="Maximum video height to download. Lower = faster download; "
-        "the extracted frame will have this resolution.",
+        description="Height cap for the full-quality video fetch. This bounds the "
+        "resolution of the extracted frame and the size of the one large download; "
+        "it does not affect search speed (the search runs on audio).",
+    )
+    search_max_height: int = Field(
+        360,
+        ge=144,
+        description="Fallback cap for the search fetch when the host has no "
+        "audio-only stream (e.g. progressive-only hosts like ok.ru): the lowest "
+        "video rendition no taller than this is used instead.",
+    )
+    clip_padding_seconds: float = Field(
+        5.0,
+        ge=0,
+        description="Seconds of video downloaded either side of the verified match "
+        "window by the clip fetch, so the target frame is safely inside the clip.",
     )
     socket_timeout_seconds: int = Field(30, ge=1)
     retries: int = Field(3, ge=0)

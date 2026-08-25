@@ -65,12 +65,16 @@ class FrameExtractor:
     def extract(self, video: VideoInfo, timestamp: float, dest_path: Path) -> FrameInfo:
         """Save the frame on screen at ``timestamp`` to ``dest_path`` and describe it.
 
-        ``dest_path``'s suffix is replaced by the configured image format.
+        ``timestamp`` is absolute (seconds into the *source*). ``video`` may be
+        a clip (``clip_start > 0``): seeking happens clip-relative, while the
+        reported frame number / timestamp stay absolute. ``dest_path``'s suffix
+        is replaced by the configured image format.
         """
         fps = self._resolve_fps(video)
-        frame_number = timestamp_to_frame(max(0.0, timestamp), fps)
-        frame_number = self._clamp_to_video(frame_number, video, fps)
-        frame_time = frame_to_timestamp(frame_number, fps)
+        local_frame = timestamp_to_frame(max(0.0, timestamp - video.clip_start), fps)
+        local_frame = self._clamp_to_video(local_frame, video, fps)
+        frame_time = video.clip_start + frame_to_timestamp(local_frame, fps)
+        frame_number = timestamp_to_frame(frame_time, fps)
 
         dest_path = dest_path.with_suffix(f".{self._config.image_format}")
         try:
@@ -82,14 +86,15 @@ class FrameExtractor:
             ) from exc
 
         logger.info(
-            "Extracting frame %d (%s, requested %s, %.3f fps) from %s",
+            "Extracting frame %d (%s, requested %s, %.3f fps%s) from %s",
             frame_number,
             format_timestamp(frame_time),
             format_timestamp(timestamp),
             fps,
+            f", clip offset {video.clip_start:.3f}s" if video.clip_start else "",
             video.path.name,
         )
-        image = self.read_frame(video, frame_number, fps)
+        image = self.read_frame(video, local_frame, fps)
         self._write_image(image, dest_path)
 
         height, width = image.shape[:2]
