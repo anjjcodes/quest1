@@ -16,7 +16,15 @@
     resultCard: $("result-card"), resultBadge: $("result-badge"), empty: $("result-empty"),
     found: $("result-found"), notFound: $("result-notfound"), errorBox: $("result-error"), json: $("result-json"),
     jobRows: $("job-rows"), health: $("health"), refresh: $("refresh-jobs"), copy: $("copy-btn"),
+    settingsBtn: $("settings-btn"), settingsOverlay: $("settings-overlay"), settingsClose: $("settings-close"),
+    settingsSave: $("settings-save"), settingsStatus: $("settings-status"),
   };
+
+  // Settings live in this page only: serverDefaults comes from /api/settings,
+  // pageConfig is what the user tweaked here. Jobs carry pageConfig with them;
+  // refreshing the page discards it and starts from the defaults again.
+  let serverDefaults = null;
+  let pageConfig = null;
 
   let currentJob = null;
   let pollTimer = null;
@@ -55,7 +63,7 @@
     if (!source || !dialogue) { showFormError("Both the video source and the dialogue are required."); return; }
     els.submit.disabled = true;
     try {
-      const job = await api("/api/jobs", { method: "POST", body: JSON.stringify({ source, dialogue, reuse_cached_media: els.reuse.checked }) });
+      const job = await api("/api/jobs", { method: "POST", body: JSON.stringify({ source, dialogue, reuse_cached_media: els.reuse.checked, settings: pageConfig }) });
       watch(job.job_id);
     } catch (err) {
       showFormError((err.body && err.body.stage ? `[${err.body.stage}] ` : "") + err.message);
@@ -146,6 +154,7 @@
       const s = li.dataset.stage, i = STAGES.indexOf(s);
       li.className = "";
       const meta = li.querySelector(".meta");
+      if (pageConfig && pageConfig.stages && pageConfig.stages[s] === false) { li.classList.add("skipped"); meta.textContent = "off"; continue; }
       if (timings[s] != null) meta.textContent = fmtSecs(timings[s]);
       if (notFound && (s === "download_video" || s === "verification" || s === "frame" || s === "face_detection" || s === "mouth_movement")) { li.classList.add("skipped"); meta.textContent = "skipped"; continue; }
       if (finished && s === "mouth_movement" && timings[s] == null) { li.classList.add("skipped"); meta.textContent = "skipped"; continue; }
@@ -315,8 +324,83 @@
     } catch (_) { els.health.innerHTML = `<span class="chip">server unreachable</span>`; }
   }
 
+  // ------------------------------------------------------------ settings
+  const STAGE_BOXES = [$("st-verification"), $("st-face"), $("st-mouth")];  // dependency order
+
+  async function loadSettings() {
+    try {
+      serverDefaults = await api("/api/settings");
+      pageConfig = JSON.parse(JSON.stringify(serverDefaults));
+    } catch (_) { /* older server */ }
+    return pageConfig;
+  }
+
+  function cascadeStages() {
+    // whisper -> face -> lip: turning a stage off turns off everything after
+    // it; a stage can only be (re-)enabled while the one before it is on.
+    for (let i = 0; i < STAGE_BOXES.length; i++) {
+      const upstreamOn = i === 0 || (STAGE_BOXES[i - 1].checked && !STAGE_BOXES[i - 1].disabled);
+      STAGE_BOXES[i].disabled = !upstreamOn;
+      if (!upstreamOn) STAGE_BOXES[i].checked = false;
+      STAGE_BOXES[i].closest("label").classList.toggle("disabled", STAGE_BOXES[i].disabled);
+    }
+  }
+  STAGE_BOXES.forEach((box) => box.addEventListener("change", cascadeStages));
+
+  function fillSettingsForm(s) {
+    STAGE_BOXES[0].checked = s.stages.verification;
+    STAGE_BOXES[1].checked = s.stages.face_detection;
+    STAGE_BOXES[2].checked = s.stages.mouth_movement;
+    cascadeStages(null);
+    $("cfg-threshold").value = s.match_threshold;
+    $("cfg-face-conf").value = s.face_min_confidence;
+    $("cfg-mouth-thr").value = s.mouth_movement_threshold;
+    $("cfg-mouth-frames").value = s.mouth_min_face_frames;
+    $("cfg-mouth-window").value = s.mouth_max_window_seconds;
+    $("cfg-max-height").value = s.max_video_height;
+  }
+
+  async function openSettings() {
+    els.settingsStatus.textContent = "";
+    const s = pageConfig || await loadSettings();
+    if (!s) { els.settingsStatus.textContent = "Could not load settings from the server."; }
+    else fillSettingsForm(s);
+    els.settingsOverlay.hidden = false;
+  }
+  function closeSettings() { els.settingsOverlay.hidden = true; }
+
+  els.settingsBtn.addEventListener("click", openSettings);
+  els.settingsClose.addEventListener("click", closeSettings);
+  els.settingsOverlay.addEventListener("click", (ev) => { if (ev.target === els.settingsOverlay) closeSettings(); });
+  document.addEventListener("keydown", (ev) => { if (ev.key === "Escape" && !els.settingsOverlay.hidden) closeSettings(); });
+
+  $("settings-reset").addEventListener("click", () => {
+    if (!serverDefaults) return;
+    fillSettingsForm(serverDefaults);
+    els.settingsStatus.textContent = "Defaults restored — press Apply to use them.";
+  });
+
+  els.settingsSave.addEventListener("click", () => {
+    // Applied in this page only: sent along with each job, gone on refresh.
+    pageConfig = {
+      stages: {
+        verification: STAGE_BOXES[0].checked,
+        face_detection: STAGE_BOXES[1].checked,
+        mouth_movement: STAGE_BOXES[2].checked,
+      },
+      match_threshold: parseFloat($("cfg-threshold").value),
+      face_min_confidence: parseFloat($("cfg-face-conf").value),
+      mouth_movement_threshold: parseFloat($("cfg-mouth-thr").value),
+      mouth_min_face_frames: parseInt($("cfg-mouth-frames").value, 10),
+      mouth_max_window_seconds: parseFloat($("cfg-mouth-window").value),
+      max_video_height: parseInt($("cfg-max-height").value, 10),
+    };
+    els.settingsStatus.textContent = "Applied to jobs from this page — refresh resets to defaults.";
+  });
+
   loadHealth();
   loadJobs();
+  loadSettings();
   const m = location.hash.match(/^#job=([\w-]+)$/);
   if (m) watch(m[1]);
 })();

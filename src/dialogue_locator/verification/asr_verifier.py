@@ -54,6 +54,22 @@ class AsrVerifier(Verifier):
             logger.info("[%s] disabled by configuration; skipping", self.name)
             return VerificationOutcome(self.name, VerificationStatus.SKIPPED, message="Verification disabled")
 
+        skip = self._config.skip_above_score
+        if skip is not None and candidate.score >= skip:
+            logger.info(
+                "[%s] first-pass score %.1f >= %.1f; skipping re-transcription",
+                self.name,
+                candidate.score,
+                skip,
+            )
+            return VerificationOutcome(
+                self.name,
+                VerificationStatus.SKIPPED,
+                score=candidate.score,
+                message=f"First-pass score {candidate.score:.1f} >= {skip:.1f}; no re-check",
+                details={"first_pass_score": round(candidate.score, 2), "skip_above_score": skip},
+            )
+
         window = self._config.search_window_seconds
         clip, clip_start, clip_end = context.slice_audio(candidate.start - window, candidate.end + window)
         details = {

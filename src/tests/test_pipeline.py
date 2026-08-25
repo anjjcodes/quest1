@@ -302,6 +302,11 @@ def test_default_pipeline_builds_no_vad_retry_transcriber(settings, sample_video
     assert isinstance(p.retry_transcriber, FasterWhisperTranscriber)
     assert p.retry_transcriber._config.vad_filter is False
     assert p.fast_transcriber._config.vad_filter is True
+    # both search transcribers decode greedily; the verify pass keeps the full beam
+    assert p.fast_transcriber._config.beam_size == settings.whisper.fast_beam_size == 1
+    assert p.retry_transcriber._config.beam_size == 1
+    from dialogue_locator.pipeline.pipeline import build_default_verifiers
+    assert build_default_verifiers(settings)[0]._transcriber._config.beam_size == 5
 
     # Disabled via config, or pointless because the VAD is already off: no retry twin.
     s_off = settings.model_copy(update={"whisper": settings.whisper.model_copy(update={"retry_without_vad": False})})
@@ -450,6 +455,33 @@ def test_no_face_skips_mouth_check(settings, sample_video):
                          face_detector=FakeFaceDetector(faces=()), mouth_analyzer=ma)
     result = p.run(PipelineRequest(source=str(sample_video), dialogue=DIALOGUE))
     assert result.status is ResultStatus.NOT_ONSCREEN  # from the face gate
+    assert ma.calls == [] and result.mouth_movement is None
+    assert "mouth_movement" not in result.stage_timings
+
+
+def test_face_stage_disabled_skips_all_visual_checks(settings, sample_video):
+    s = settings.model_copy(
+        update={"face_detection": settings.face_detection.model_copy(update={"enabled": False})}
+    )
+    fd, ma = FakeFaceDetector(), FakeMouthAnalyzer()
+    p, _ = make_pipeline(s, sample_video, TRANSCRIPT, face_detector=fd, mouth_analyzer=ma)
+    result = p.run(PipelineRequest(source=str(sample_video), dialogue=DIALOGUE))
+    assert result.status is ResultStatus.FOUND and result.frame is not None
+    assert fd.paths == [] and ma.calls == []
+    assert result.face_detection is None and result.mouth_movement is None
+    assert "face_detection" not in result.stage_timings
+    assert "mouth_movement" not in result.stage_timings
+
+
+def test_mouth_stage_disabled_skips_only_mouth(settings, sample_video):
+    s = settings.model_copy(
+        update={"mouth_movement": settings.mouth_movement.model_copy(update={"enabled": False})}
+    )
+    ma = FakeMouthAnalyzer()
+    p, _ = make_pipeline(s, sample_video, TRANSCRIPT, mouth_analyzer=ma)
+    result = p.run(PipelineRequest(source=str(sample_video), dialogue=DIALOGUE))
+    assert result.status is ResultStatus.FOUND
+    assert result.face_present is True  # face check still ran
     assert ma.calls == [] and result.mouth_movement is None
     assert "mouth_movement" not in result.stage_timings
 

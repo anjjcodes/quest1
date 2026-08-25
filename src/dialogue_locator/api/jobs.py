@@ -37,6 +37,8 @@ def _now() -> datetime:
 @dataclass
 class Job:
     request: PipelineRequest
+    pipeline: DialoguePipeline | None = None  # per-job override; None = manager default
+    settings_view: Any | None = None  # normalised SettingsView echoed in responses
     status: JobStatus = JobStatus.QUEUED
     created_at: datetime = field(default_factory=_now)
     started_at: datetime | None = None
@@ -67,8 +69,13 @@ class JobManager:
         self._executor = ThreadPoolExecutor(max_workers=max_concurrent, thread_name_prefix="job")
 
     # ------------------------------------------------------------------ #
-    def submit(self, request: PipelineRequest) -> Job:
-        job = Job(request=request)
+    def submit(
+        self,
+        request: PipelineRequest,
+        pipeline: DialoguePipeline | None = None,
+        settings_view: Any | None = None,
+    ) -> Job:
+        job = Job(request=request, pipeline=pipeline, settings_view=settings_view)
         with self._lock:
             self._expire_locked()
             self._jobs[job.id] = job
@@ -131,8 +138,9 @@ class JobManager:
             job.progress = stamped
             job.progress_log.append(stamped)
 
+        pipeline = job.pipeline or self._pipeline
         try:
-            result = self._pipeline.run(job.request, progress=on_progress, should_cancel=job.cancel_event.is_set)
+            result = pipeline.run(job.request, progress=on_progress, should_cancel=job.cancel_event.is_set)
         except PipelineCancelledError as exc:
             job.error = exc.to_dict()
             self._finish(job, JobStatus.CANCELLED)
@@ -149,7 +157,7 @@ class JobManager:
 
         job.result = result
         try:
-            out_dir = self._pipeline.settings.storage.output_dir / job.id
+            out_dir = pipeline.settings.storage.output_dir / job.id
             save_result(result, out_dir / RESULT_FILENAME)
         except OSError as exc:  # pragma: no cover
             logger.warning("Could not persist result for job %s: %s", job.id, exc)

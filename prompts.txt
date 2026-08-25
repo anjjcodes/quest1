@@ -229,14 +229,14 @@ keep it in light theame and big fonts
 
 
 Prompt 25: [optimise the download time]
-instead of downloading whole video in high quality lets load the audio or lowest video quality present and then once we find the fuzzy matching chucks for each chuck while before starting verification well download the highest quality video, do i think we should modify as such in the code-base
+instead of downloading whole video in high quality lets load the audio or lowest video quality present and then once we find the fuzzy matching chucks for each chuck while before starting verification we'll download the highest quality video, do u think we should modify as such in the code-base
 
 Prompt 26: [corrections in claude implementation plan]
 
-i think now max height from config doesnt need, cause we are going to search audio itself right, no need to cap heights.
+i think now max height from config is not needed, cause we are going to search audio itself right, no need of cap heights.
 
 Prompt 27:
-only after verify the clip with high wispher model we should go download only that clip, beacuse this then reduces downloading whole clip from 55mins to 6sec per clip.
+only after verifying the clip with high Whisper model we should go download only that clip, beacuse this then reduces downloading whole clip from 55mins to 6sec per clip.
 
 Prompt 28:  [pasted the not_found result JSON for an Infinity War upload (149 min), dialogue
 "you're not the only one cursed with knowledge"; best near-miss 63.3 at 01:20:43]
@@ -247,3 +247,20 @@ Prompt 29:  [the diagnosis showed the VAD filter dropping the line under the lou
 (all three models got the same 18 words in that 5-minute window; VAD off heard it at 100.0);
 approving the proposed retry-without-VAD fallback pass]
 okay
+
+Prompt 30 : For V2, we already have the dialogue-matching timestamp and the corresponding video frame from V1. Now, instead of processing the entire video again, we should work only with the relevant video/frame around the matched dialogue.
+The first step in V2 is to check whether a human face is visible on camera in the matched frame. We need to detect whether at least one human face is present in the frame corresponding to the dialogue.For now, V2 should only focus on human face detection.
+After implementing each module or file, stop and ask for my approval before continuing. Do not assume or guess any requirements that I have not specified.
+
+Prompt 31 : After V2 confirms that a human face is present, the initial version of V3 should focus only on detecting whether the person's mouth is moving.
+
+Use MediaPipe Face Landmarker to track the facial landmarks across a short video segment around the matched dialogue timestamp. Extract the relevant mouth/lip landmarks and analyze their movement across consecutive frames.
+
+The goal at this stage is simply to determine whether there is significant mouth movement while the dialogue is being spoken.
+
+
+Prompt 31 :
+Since we completed most part now, lets refine the frontend a little, first the config is static, lets make it variable, so for given job requiers a config, and based on that config the job is exicuted if no config is provided, then use our default config.
+ and with that make a settings button in top right corner of frontend, and when clicked opens a pop-up it should show all the parameters and have validators, mainly the verification selection should be dependent in order like wishpher -> face -> lips detection.
+
+ 

@@ -14,10 +14,52 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field
 
 
+class StageToggles(BaseModel):
+    """Optional pipeline stages, in dependency order.
+
+    Downstream stages build on upstream ones: the mouth check needs a confirmed
+    face, and the visual checks assume a verified match. The job handler
+    normalises accordingly - disabling a stage disables everything after it,
+    never the other way round.
+    """
+
+    verification: bool = True  # second-pass large Whisper model
+    face_detection: bool = True  # V2
+    mouth_movement: bool = True  # V3
+
+
+class SettingsView(BaseModel):
+    """The curated, UI-editable slice of the configuration.
+
+    GET /api/settings returns the server defaults; a job may carry a modified
+    copy in ``JobCreate.settings`` to override them for that job only. Nothing
+    is stored server-side - a page refresh starts from the defaults again.
+    """
+
+    stages: StageToggles = Field(default_factory=StageToggles)
+    match_threshold: float = Field(ge=0, le=100, description="Minimum fuzzy match score (0-100)")
+    face_min_confidence: float = Field(ge=0, le=1, description="Minimum face detection confidence")
+    mouth_movement_threshold: float = Field(
+        gt=0, description="Minimum mouth-openness std to count as moving"
+    )
+    mouth_min_face_frames: int = Field(
+        ge=2, description="Frames with a face needed for a mouth verdict"
+    )
+    mouth_max_window_seconds: float = Field(
+        gt=0, description="Max seconds of the window analysed for movement"
+    )
+    max_video_height: int = Field(ge=144, description="Height cap for the full-quality video fetch")
+
+
 class JobCreate(BaseModel):
     source: str = Field(..., description="Video URL (YouTube, ok.ru, ...) or a local file path", examples=["https://ok.ru/video/248244667877"])
     dialogue: str = Field(..., description="The spoken dialogue to locate", examples=["My mind rebels at stagnation"])
     reuse_cached_media: bool = Field(True, description="Reuse a previous download/extraction of the same source")
+    settings: SettingsView | None = Field(
+        None,
+        description="Optional per-job settings overriding the server defaults for this "
+        "job only. Stage toggles cascade downstream (verification -> face -> mouth).",
+    )
 
 
 class JobStatus(str, Enum):
@@ -147,6 +189,9 @@ class JobResponse(BaseModel):
     result: ResultSchema | None = None
     error: ErrorSchema | None = None
     frame_url: str | None = Field(None, description="URL of the extracted frame image, when available")
+    settings: SettingsView | None = Field(
+        None, description="The effective (normalised) settings this job ran with"
+    )
 
 
 class JobListResponse(BaseModel):

@@ -92,7 +92,12 @@ class WhisperConfig(BaseModel):
         description="Model for the streaming pass. 'base' runs ~12x realtime on Apple Silicon CPU "
         "(vs ~3x for 'small') with near-identical hit rate; the verify model fixes wording/timing.",
     )
-    verify_model: str = Field("medium", description="Model for the verification pass.")
+    verify_model: str = Field(
+        "small",
+        description="Model for the verification pass. 'small' confirms/refines a "
+        "fuzzy match about as reliably as 'medium' at ~3x the speed on CPU; bump "
+        "to 'medium' for maximum wording accuracy.",
+    )
     device: Literal["auto", "cpu", "cuda"] = "auto"
     compute_type: str = Field(
         "int8",
@@ -110,7 +115,18 @@ class WhisperConfig(BaseModel):
         description="Force a language (ISO 639-1) or None to auto-detect. Forcing "
         "avoids a detection step and mis-detections on music intros.",
     )
-    beam_size: int = Field(5, ge=1)
+    beam_size: int = Field(
+        5,
+        ge=1,
+        description="Beam width for the verification pass, where accuracy matters.",
+    )
+    fast_beam_size: int = Field(
+        1,
+        ge=1,
+        description="Beam width for the streaming search pass. Greedy (1) decodes "
+        "~1.5-2x faster than beam 5; the fuzzy matcher absorbs the slightly "
+        "rougher wording and the verification pass re-checks it anyway.",
+    )
     vad_filter: bool = Field(
         True,
         description="Skip silent regions. Speeds up long videos with quiet stretches.",
@@ -166,9 +182,22 @@ class VerificationConfig(BaseModel):
 
     enabled: bool = True
     search_window_seconds: float = Field(
-        20.0,
+        12.0,
         gt=0,
-        description="Re-transcribe +/- this many seconds around the candidate.",
+        description="Re-transcribe +/- this many seconds around the candidate. "
+        "Fast-pass timestamps are rarely off by more than a couple of seconds, "
+        "so this bounds the (expensive) large-model transcription generously "
+        "while keeping it short.",
+    )
+    skip_above_score: float | None = Field(
+        90.0,
+        ge=0,
+        le=100,
+        description="Skip the large-model re-transcription when the first pass "
+        "already scored at least this: verification exists to check uncertain "
+        "matches, not to re-prove near-perfect ones. Calibrated for the greedy "
+        "fast pass, whose correct matches score ~94+ while the genuinely "
+        "uncertain band sits at 80-90. None = always verify.",
     )
     max_score_drop: float = Field(
         5.0,
@@ -194,6 +223,11 @@ class FaceDetectionConfig(BaseModel):
     at ``model_path``.
     """
 
+    enabled: bool = Field(
+        True,
+        description="Run the face check on the matched frame. Disabling it also "
+        "disables the mouth-movement check, which builds on a confirmed face.",
+    )
     min_detection_confidence: float = Field(
         0.3,
         ge=0,
@@ -233,6 +267,11 @@ class MouthMovementConfig(BaseModel):
     static face, so the default threshold sits well between the two.
     """
 
+    enabled: bool = Field(
+        True,
+        description="Run the mouth-movement check. Only runs when the face "
+        "check is enabled and confirmed a face.",
+    )
     movement_threshold: float = Field(
         0.02,
         gt=0,

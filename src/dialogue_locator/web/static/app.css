@@ -34,6 +34,23 @@ code { font-family: var(--mono); font-size: .92em; }
 .chip { font-family: var(--mono); font-size: 13px; padding: 4px 10px; border-radius: 999px; background: var(--surface-2); border: 1px solid var(--line); color: var(--text-2); }
 .chip b { color: var(--text); font-weight: 600; }
 .app-footer { text-align: center; color: var(--muted); font-size: 14px; padding: 20px; }
+.icon-btn { padding: 8px; display: inline-grid; place-items: center; border-radius: 10px; }
+
+/* ---------- settings modal ----------------------------------------------- */
+.modal-overlay { position: fixed; inset: 0; z-index: 50; background: rgba(16, 24, 40, .45); display: grid; place-items: center; padding: 20px; }
+.modal { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); padding: 22px 24px 24px; width: min(560px, 100%); max-height: 90vh; overflow-y: auto; }
+.modal-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 4px; }
+.modal-head h2 { font-size: 19px; }
+.modal-section { font-size: 15px; text-transform: uppercase; letter-spacing: .04em; color: var(--text-2); margin: 18px 0 6px; }
+.stage-chain { display: grid; gap: 8px; }
+.stage-chain .dep-1 { margin-left: 24px; }
+.stage-chain .dep-2 { margin-left: 48px; }
+.stage-chain label.disabled { opacity: .45; }
+.cfg-grid { display: grid; grid-template-columns: 1fr 130px; gap: 10px 14px; align-items: center; }
+.cfg-grid label { font-size: 15px; }
+.cfg-grid input { border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; font: inherit; background: var(--surface-2); width: 100%; }
+.cfg-grid input:focus { outline: 2px solid var(--primary-soft); border-color: var(--primary); }
+.modal-foot { display: flex; align-items: center; justify-content: flex-end; gap: 12px; margin-top: 20px; }
 
 /* ---------- layout ------------------------------------------------------- */
 .app { max-width: 1380px; margin: 24px auto; padding: 0 24px; display: grid; grid-template-columns: 440px minmax(0, 1fr); gap: 20px; align-items: start; }

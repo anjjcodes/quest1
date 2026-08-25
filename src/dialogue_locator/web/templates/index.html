@@ -23,6 +23,12 @@
     <div class="header-right">
       <div id="health" class="chips" title="Server configuration"></div>
       <a class="link" href="/docs" target="_blank" rel="noopener">API docs</a>
+      <button id="settings-btn" type="button" class="btn btn-ghost icon-btn" title="Settings" aria-label="Settings">
+        <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="3"/>
+          <path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1.03 1.56V21a2 2 0 1 1-4 0v-.09a1.7 1.7 0 0 0-1.11-1.56 1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.7 1.7 0 0 0 .34-1.87 1.7 1.7 0 0 0-1.56-1.03H3a2 2 0 1 1 0-4h.09a1.7 1.7 0 0 0 1.56-1.11 1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.7 1.7 0 0 0 1.87.34h.01A1.7 1.7 0 0 0 10 3.09V3a2 2 0 1 1 4 0v.09a1.7 1.7 0 0 0 1.03 1.56 1.7 1.7 0 0 0 1.87-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.7 1.7 0 0 0-.34 1.87v.01A1.7 1.7 0 0 0 20.91 10H21a2 2 0 1 1 0 4h-.09a1.7 1.7 0 0 0-1.51 1z"/>
+        </svg>
+      </button>
     </div>
   </header>
 
@@ -184,6 +190,49 @@
       </section>
     </section>
   </main>
+
+  <div id="settings-overlay" class="modal-overlay" hidden>
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+      <header class="modal-head">
+        <h2 id="settings-title">Settings</h2>
+        <button id="settings-close" type="button" class="btn btn-ghost btn-sm" aria-label="Close">✕</button>
+      </header>
+      <p class="hint">Opens with the defaults. Changes apply to jobs you start from this page; refreshing the page resets everything to the defaults.</p>
+
+      <h3 class="modal-section">Pipeline stages</h3>
+      <p class="hint">Each stage builds on the one before it: turning one off also turns off the stages after it.</p>
+      <div class="stage-chain">
+        <label class="check"><input id="st-verification" type="checkbox">
+          <span>Verification <span class="muted">— re-check the match with the large Whisper model</span></span></label>
+        <label class="check dep-1"><input id="st-face" type="checkbox">
+          <span>Face detection <span class="muted">— require a human face in the matched frame (V2)</span></span></label>
+        <label class="check dep-2"><input id="st-mouth" type="checkbox">
+          <span>Mouth movement <span class="muted">— require the face's lips to move during the line (V3)</span></span></label>
+      </div>
+
+      <h3 class="modal-section">Tuning</h3>
+      <div class="cfg-grid">
+        <label for="cfg-threshold">Match threshold <span class="muted">0–100</span></label>
+        <input id="cfg-threshold" type="number" min="0" max="100" step="1">
+        <label for="cfg-face-conf">Face confidence <span class="muted">0–1</span></label>
+        <input id="cfg-face-conf" type="number" min="0" max="1" step="0.05">
+        <label for="cfg-mouth-thr">Mouth movement threshold</label>
+        <input id="cfg-mouth-thr" type="number" min="0.001" max="1" step="0.005">
+        <label for="cfg-mouth-frames">Min frames with a face</label>
+        <input id="cfg-mouth-frames" type="number" min="2" step="1">
+        <label for="cfg-mouth-window">Max analysed window <span class="muted">seconds</span></label>
+        <input id="cfg-mouth-window" type="number" min="1" step="1">
+        <label for="cfg-max-height">Max video height <span class="muted">px</span></label>
+        <input id="cfg-max-height" type="number" min="144" step="1">
+      </div>
+
+      <footer class="modal-foot">
+        <span id="settings-status" class="muted small"></span>
+        <button id="settings-reset" type="button" class="btn btn-ghost">Reset to defaults</button>
+        <button id="settings-save" type="button" class="btn btn-primary">Apply</button>
+      </footer>
+    </div>
+  </div>
 
   <footer class="app-footer">
     Dialogue Locator · streaming Faster-Whisper + RapidFuzz + large-model verification · results are also written to <code>data/output/&lt;job&gt;/</code>

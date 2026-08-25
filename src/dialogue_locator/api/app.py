@@ -28,12 +28,16 @@ def create_app(settings: Settings | None = None, pipeline: DialoguePipeline | No
     settings = settings or get_settings()
     configure_logging(settings.logging)
     settings.ensure_directories()
+    # PUT /api/settings rebuilds the pipeline through this factory; deriving it
+    # from the injected pipeline's type keeps test fakes fake across rebuilds.
+    pipeline_factory = DialoguePipeline if pipeline is None else type(pipeline)
     pipeline = pipeline or DialoguePipeline(settings)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         app.state.settings = settings
         app.state.pipeline = pipeline
+        app.state.pipeline_factory = pipeline_factory
         app.state.jobs = JobManager(
             pipeline, max_concurrent=settings.server.max_concurrent_jobs, retention_seconds=settings.server.job_retention_seconds
         )

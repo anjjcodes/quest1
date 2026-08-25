@@ -251,3 +251,67 @@ def test_web_ui_served(client):
     assert "Dialogue Locator" in r.text and '/static/app.js' in r.text
     assert client.get("/static/app.js").status_code == 200
     assert client.get("/static/app.css").status_code == 200
+
+
+# --------------------------------------------------------------------------- #
+# settings API
+# --------------------------------------------------------------------------- #
+def test_get_settings_defaults(client):
+    s = client.get("/api/settings").json()
+    assert s["stages"] == {"verification": True, "face_detection": True, "mouth_movement": True}
+    assert s["match_threshold"] == 80.0
+    assert s["face_min_confidence"] == 0.3
+    assert s["mouth_movement_threshold"] == 0.02
+
+
+def test_job_with_settings_overrides(client):
+    body = client.get("/api/settings").json()
+    body["match_threshold"] = 90.0
+    body["stages"]["mouth_movement"] = False
+    create = {"source": "https://ok.ru/video/1", "dialogue": DIALOGUE, "settings": body}
+    job = client.post("/api/jobs", json=create).json()
+    # the job echoes its effective settings and still completes (fake pipeline
+    # type is preserved by the rebuild factory)
+    assert job["settings"]["match_threshold"] == 90.0
+    assert job["settings"]["stages"]["mouth_movement"] is False
+    assert wait_finished(client, job["job_id"])["status"] == "done"
+    # nothing was stored server-side: defaults are untouched
+    assert client.get("/api/settings").json()["match_threshold"] == 80.0
+
+
+def test_job_settings_cascade_downstream_only(client):
+    body = client.get("/api/settings").json()
+
+    def submit(stages):
+        body["stages"] = stages
+        create = {"source": "https://ok.ru/video/1", "dialogue": DIALOGUE, "settings": body}
+        return client.post("/api/jobs", json=create).json()["settings"]["stages"]
+
+    # face off pulls mouth off, leaves verification alone
+    assert submit({"verification": True, "face_detection": False, "mouth_movement": True}) == {
+        "verification": True, "face_detection": False, "mouth_movement": False,
+    }
+    # verification off pulls the whole visual chain off
+    assert submit({"verification": False, "face_detection": True, "mouth_movement": True}) == {
+        "verification": False, "face_detection": False, "mouth_movement": False,
+    }
+    # downstream-only change touches nothing upstream
+    assert submit({"verification": True, "face_detection": True, "mouth_movement": False}) == {
+        "verification": True, "face_detection": True, "mouth_movement": False,
+    }
+
+
+def test_job_without_settings_echoes_defaults(client):
+    create = {"source": "https://ok.ru/video/1", "dialogue": DIALOGUE}
+    job = client.post("/api/jobs", json=create).json()
+    assert job["settings"]["match_threshold"] == 80.0
+    assert job["settings"]["stages"] == {
+        "verification": True, "face_detection": True, "mouth_movement": True,
+    }
+
+
+def test_job_settings_rejects_bad_values(client):
+    body = client.get("/api/settings").json()
+    body["match_threshold"] = 150
+    create = {"source": "https://ok.ru/video/1", "dialogue": DIALOGUE, "settings": body}
+    assert client.post("/api/jobs", json=create).status_code == 422

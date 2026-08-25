@@ -7,9 +7,11 @@ from dialogue_locator.config import MatchingConfig, Settings, get_settings, rese
 def test_defaults_load():
     s = Settings()
     assert s.whisper.fast_model == "base"
-    assert s.whisper.verify_model == "medium"
+    assert s.whisper.verify_model == "small"
     assert s.matching.match_threshold == 80.0
-    assert s.verification.search_window_seconds == 20.0
+    assert s.verification.search_window_seconds == 12.0
+    assert s.verification.skip_above_score == 90.0
+    assert s.whisper.fast_beam_size == 1 and s.whisper.beam_size == 5
     assert s.audio.sample_rate == 16_000
 
 

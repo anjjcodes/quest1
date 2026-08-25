@@ -63,6 +63,9 @@ def context(duration: float = 120.0) -> VerificationContext:
 
 
 def verifier(tr: Transcriber, **cfg) -> AsrVerifier:
+    # These tests exercise the re-transcription path itself, so the near-perfect
+    # shortcut is off unless a test sets it (test_skip_above_score_* cover it).
+    cfg.setdefault("skip_above_score", None)
     return AsrVerifier(tr, MatchingConfig(), VerificationConfig(**cfg))
 
 
@@ -153,6 +156,24 @@ def test_no_words_in_window_is_rejected():
     logger.info("<<< got REJECTED as expected")
 
 
+def test_skip_above_score_shortcut():
+    # A near-perfect first pass skips the expensive re-transcription entirely.
+    first = candidate("my mind rebels at stagnation", start=60.0, score=97.0)
+    tr = FakeTranscriber(words_at("should never be pulled", start=0.0))
+    out = verifier(tr, skip_above_score=95.0).verify(first, context())
+    assert out.status is VerificationStatus.SKIPPED
+    assert out.score == 97.0 and "no re-check" in out.message
+    assert tr.calls == []  # the large model never ran
+
+
+def test_skip_above_score_still_verifies_below_threshold():
+    first = candidate("my mind reveals a stagnation", start=60.0, score=92.9)
+    tr = FakeTranscriber(words_at("my mind rebels at stagnation", start=20.0))
+    out = verifier(tr, skip_above_score=95.0).verify(first, context())
+    assert out.status is VerificationStatus.CONFIRMED  # ran the full check
+    assert len(tr.calls) == 1
+
+
 def test_disabled_verifier_is_skipped():
     first = candidate("my mind rebels at stagnation", start=60.0, score=100.0)
     tr = FakeTranscriber(words_at("x", 0))
@@ -191,7 +212,7 @@ def test_candidate_beyond_audio_is_failed():
 def test_outcome_serialises():
     first = candidate("my mind rebels at stagnation", start=60.0, score=100.0)
     tr = FakeTranscriber(words_at("my mind rebels at stagnation", start=20.0))
-    d = verifier(tr).verify(first, context()).to_dict()
+    d = verifier(tr, search_window_seconds=20.0).verify(first, context()).to_dict()
     assert d["verifier"] == "asr_large_model" and d["status"] == "confirmed"
     assert d["refined"]["timestamp"] == "00:01:00.000"
     assert set(d["details"]) >= {"model", "clip_start", "clip_end", "first_pass_score", "seconds", "clip_words", "shift_seconds"}
@@ -221,6 +242,8 @@ def test_real_tiny_then_base(tmp_path: Path):
     first = StreamingMatcher(DIALOGUE, MatchingConfig()).feed_many(FasterWhisperTranscriber("tiny", cfg).transcribe(samples))
     assert first is not None
     ctx = VerificationContext(dialogue=DIALOGUE, audio_samples=samples, audio_path=wav)
-    out = AsrVerifier(FasterWhisperTranscriber("base", cfg), MatchingConfig(), VerificationConfig(search_window_seconds=5)).verify(first, ctx)
+    vcfg = VerificationConfig(search_window_seconds=5, skip_above_score=None)
+    big = FasterWhisperTranscriber("base", cfg)
+    out = AsrVerifier(big, MatchingConfig(), vcfg).verify(first, ctx)
     assert out.status is VerificationStatus.CONFIRMED
     assert abs(out.refined.start - first.start) < 1.0

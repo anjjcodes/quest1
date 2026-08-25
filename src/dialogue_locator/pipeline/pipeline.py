@@ -131,15 +131,20 @@ class DialoguePipeline:
         self.settings = settings
         self.downloader = downloader or VideoDownloader(settings.download, settings.audio.ffprobe_binary)
         self.audio_extractor = audio_extractor or AudioExtractor(settings.audio)
+        # The streaming pass decodes greedily (fast_beam_size); the verify
+        # transcriber built in build_default_verifiers keeps the full beam.
+        fast_config = settings.whisper.model_copy(
+            update={"beam_size": settings.whisper.fast_beam_size}
+        )
         self.fast_transcriber = fast_transcriber or FasterWhisperTranscriber(
-            settings.whisper.fast_model, settings.whisper
+            settings.whisper.fast_model, fast_config
         )
         if retry_transcriber is not None:
             self.retry_transcriber: Transcriber | None = retry_transcriber
         elif fast_transcriber is None and settings.whisper.vad_filter and settings.whisper.retry_without_vad:
             # Same weights as fast_transcriber via WhisperModelCache (the VAD flag is
             # not part of the cache key), so this costs no extra memory or load time.
-            no_vad = settings.whisper.model_copy(update={"vad_filter": False})
+            no_vad = fast_config.model_copy(update={"vad_filter": False})
             self.retry_transcriber = FasterWhisperTranscriber(settings.whisper.fast_model, no_vad)
         else:
             self.retry_transcriber = None
@@ -372,6 +377,11 @@ class _Run:
             # no face on camera is reported as NOT_ONSCREEN (details are kept so
             # the caller can inspect what was found). Fails open: if the check
             # itself cannot run, the localisation stands, with a warning.
+            # Disabling it (config/settings API) skips it and, because the mouth
+            # check requires a confirmed face, the mouth check with it.
+            if not self.settings.face_detection.enabled:
+                logger.info("Face detection disabled; skipping visual checks")
+                return result
             self._begin(PipelineStage.FACE_DETECTION, "Checking for a face in the frame")
             try:
                 result.face_detection = self.p.face_detector.detect_file(result.frame.image_path)
@@ -397,7 +407,11 @@ class _Run:
             # not speaking the line (reaction shot, voice-over) -> NOT_ONSCREEN.
             # Indeterminate (too few landmark frames) or a crashed analyser
             # fails open with a warning, like the face check.
-            if result.face_detection is not None and result.face_detection.face_present:
+            if (
+                self.settings.mouth_movement.enabled
+                and result.face_detection is not None
+                and result.face_detection.face_present
+            ):
                 self._check_cancel()
                 self._begin(PipelineStage.MOUTH_MOVEMENT, "Checking for mouth movement")
                 try:

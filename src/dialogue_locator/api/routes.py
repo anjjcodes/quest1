@@ -16,6 +16,8 @@ from dialogue_locator.api.schemas import (
     JobResponse,
     JobStatus,
     ProgressSchema,
+    SettingsView,
+    StageToggles,
 )
 from dialogue_locator.config import Settings
 from dialogue_locator.exceptions import InvalidURLError
@@ -52,6 +54,7 @@ def job_to_response(job: Job) -> JobResponse:
         result=job.result.to_dict() if job.result else None,
         error=job.error,
         frame_url=f"/api/jobs/{job.id}/frame" if job.frame_path else None,
+        settings=job.settings_view,
     )
 
 
@@ -68,11 +71,80 @@ def health(request: Request) -> HealthResponse:
     )
 
 
+def settings_to_view(s: Settings) -> SettingsView:
+    return SettingsView(
+        stages=StageToggles(
+            verification=s.verification.enabled,
+            face_detection=s.face_detection.enabled,
+            mouth_movement=s.mouth_movement.enabled,
+        ),
+        match_threshold=s.matching.match_threshold,
+        face_min_confidence=s.face_detection.min_detection_confidence,
+        mouth_movement_threshold=s.mouth_movement.movement_threshold,
+        mouth_min_face_frames=s.mouth_movement.min_face_frames,
+        mouth_max_window_seconds=s.mouth_movement.max_window_seconds,
+        max_video_height=s.download.max_height,
+    )
+
+
+def apply_setting_overrides(
+    defaults: Settings, view: SettingsView
+) -> tuple[Settings, SettingsView]:
+    """Return ``(effective settings, normalised view)`` for one job.
+
+    Stage dependencies cascade downstream: verification off also turns off the
+    face check, and the face check off also turns off the mouth check - the
+    visual stages build on what came before them, never the other way round.
+    """
+    verification = view.stages.verification
+    face = view.stages.face_detection and verification
+    mouth = view.stages.mouth_movement and face
+
+    effective = defaults.model_copy(
+        update={
+            "verification": defaults.verification.model_copy(update={"enabled": verification}),
+            "matching": defaults.matching.model_copy(
+                update={"match_threshold": view.match_threshold}
+            ),
+            "face_detection": defaults.face_detection.model_copy(
+                update={"enabled": face, "min_detection_confidence": view.face_min_confidence}
+            ),
+            "mouth_movement": defaults.mouth_movement.model_copy(
+                update={
+                    "enabled": mouth,
+                    "movement_threshold": view.mouth_movement_threshold,
+                    "min_face_frames": view.mouth_min_face_frames,
+                    "max_window_seconds": view.mouth_max_window_seconds,
+                }
+            ),
+            "download": defaults.download.model_copy(update={"max_height": view.max_video_height}),
+        }
+    )
+    return effective, settings_to_view(effective)
+
+
+@router.get("/settings", response_model=SettingsView)
+def get_default_settings(request: Request) -> SettingsView:
+    """The server-default settings. Jobs may override them per job via
+    ``JobCreate.settings``; nothing is ever stored server-side."""
+    return settings_to_view(_settings(request))
+
+
 @router.post("/jobs", response_model=JobResponse, status_code=status.HTTP_202_ACCEPTED)
 def create_job(body: JobCreate, request: Request) -> JobResponse:
-    settings = _settings(request)
+    defaults = _settings(request)
+    # Per-job settings overrides: normalise the stage cascade and build a
+    # pipeline for this job only (cheap - model caches are process-wide).
+    # Nothing is stored server-side, so clients reset to defaults naturally.
+    if body.settings is not None:
+        effective, view = apply_setting_overrides(defaults, body.settings)
+        pipeline = request.app.state.pipeline_factory(effective)
+    else:
+        effective, view = defaults, settings_to_view(defaults)
+        pipeline = None  # the shared default pipeline
+
     # Fail fast on bad input (raises InvalidDialogueError / InvalidURLError -> 422 via app handler).
-    TargetDialogue.parse(body.dialogue, settings.matching)
+    TargetDialogue.parse(body.dialogue, effective.matching)
     source = body.source.strip()
     if "://" in source or is_url(source):
         validate_url(source)  # any URL-looking input must be a valid http(s) URL
@@ -81,7 +153,7 @@ def create_job(body: JobCreate, request: Request) -> JobResponse:
             f"'{source}' is neither an http(s) URL nor an existing file.", details={"source": source}
         )
     req = PipelineRequest(source=body.source.strip(), dialogue=body.dialogue.strip(), reuse_cached_media=body.reuse_cached_media)
-    job = _manager(request).submit(req)
+    job = _manager(request).submit(req, pipeline=pipeline, settings_view=view)
     return job_to_response(job)
 
 
