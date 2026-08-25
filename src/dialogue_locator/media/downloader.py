@@ -23,6 +23,7 @@ metadata (which is often missing or rounded).
 from __future__ import annotations
 
 import logging
+import time
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -37,6 +38,18 @@ from dialogue_locator.media.probe import probe_media
 from dialogue_locator.models import MediaInfo, PipelineStage, ProgressCallback, ProgressEvent, VideoInfo
 
 logger = logging.getLogger(__name__)
+
+
+def _format_speed(bytes_per_sec: float) -> str:
+    if bytes_per_sec >= 1e6:
+        return f"{bytes_per_sec / 1e6:.1f} MB/s"
+    return f"{bytes_per_sec / 1e3:.0f} KB/s"
+
+
+def _format_eta(seconds: float) -> str:
+    h, rem = divmod(int(seconds), 3600)
+    m, sec = divmod(rem, 60)
+    return f"{h}:{m:02d}:{sec:02d}" if h else f"{m}:{sec:02d}"
 
 _ALLOWED_SCHEMES = ("http", "https")
 _VIDEO_STEM = "video"  # full-quality fetch, cached per source
@@ -346,33 +359,53 @@ class VideoDownloader:
     # Progress
     # ------------------------------------------------------------------ #
     def _make_progress_hook(self, progress: ProgressCallback | None):
-        last_bucket = {"value": -1}
+        # Time-throttled rather than percent-bucketed: on a slow host a 5 % step
+        # can be minutes of silence that reads as a hang, while yt-dlp calls the
+        # hook many times a second on a fast one. One event per interval, with
+        # size, speed and ETA, keeps the log honest at both extremes.
+        state = {"last_emit": 0.0}
+        interval = self._config.progress_interval_seconds
 
         def hook(status: dict[str, Any]) -> None:
             if progress is None:
                 return
             if status.get("status") == "downloading":
-                total = status.get("total_bytes") or status.get("total_bytes_estimate")
+                now = time.monotonic()
+                if now - state["last_emit"] < interval:
+                    return
                 done = status.get("downloaded_bytes")
-                if total and done is not None:
+                if done is None:
+                    return
+                state["last_emit"] = now
+                total = status.get("total_bytes") or status.get("total_bytes_estimate")
+                speed = status.get("speed")  # bytes/s, None until yt-dlp has a sample
+                eta = status.get("eta")  # seconds, None when the total is unknown
+                parts = []
+                details: dict[str, Any] = {"downloaded_mb": round(done / 1e6, 1)}
+                fraction: float | None = None
+                if total:
                     fraction = min(done / total, 1.0)
-                    bucket = int(fraction * 20)  # report every 5 %
-                    if bucket != last_bucket["value"]:
-                        last_bucket["value"] = bucket
-                        self._emit(
-                            progress,
-                            f"Downloading {fraction:.0%}",
-                            fraction,
-                            {"downloaded_mb": round(done / 1e6, 1), "total_mb": round(total / 1e6, 1)},
-                        )
+                    parts.append(f"{fraction:.0%}")
+                    parts.append(f"{done / 1e6:.1f}/{total / 1e6:.1f} MB")
+                    details["total_mb"] = round(total / 1e6, 1)
+                else:
+                    parts.append(f"{done / 1e6:.1f} MB")
+                if speed:
+                    parts.append(_format_speed(speed))
+                    details["speed_bps"] = round(speed)
+                if eta is not None:
+                    parts.append(f"ETA {_format_eta(eta)}")
+                    details["eta_seconds"] = round(eta)
+                self._emit(progress, "Downloading " + " \N{MIDDLE DOT} ".join(parts), fraction, details)
             elif status.get("status") == "finished":
+                state["last_emit"] = 0.0  # a following file (e.g. audio after video) reports at once
                 self._emit(progress, "Download finished, post-processing", 1.0, {})
 
         return hook
 
     @staticmethod
     def _emit(
-        progress: ProgressCallback | None, message: str, fraction: float, details: dict[str, Any]
+        progress: ProgressCallback | None, message: str, fraction: float | None, details: dict[str, Any]
     ) -> None:
         if progress is not None:
             progress(ProgressEvent(PipelineStage.DOWNLOAD, message, fraction, details))

@@ -117,13 +117,16 @@ def settings(tmp_path: Path) -> Settings:
     return Settings(storage={"work_dir": tmp_path / "work", "output_dir": tmp_path / "out"})
 
 
-def make_pipeline(settings: Settings, sample_video: Path, transcript: str, verifiers=None, downloader=None) -> tuple[DialoguePipeline, ScriptedTranscriber]:
+def make_pipeline(
+    settings: Settings, sample_video: Path, transcript: str, verifiers=None, downloader=None, retry_transcriber=None
+) -> tuple[DialoguePipeline, ScriptedTranscriber]:
     tr = ScriptedTranscriber(transcript)
     p = DialoguePipeline(
         settings,
         downloader=downloader or FakeDownloader(sample_video),
         fast_transcriber=tr,
         verifiers=[] if verifiers is None else verifiers,
+        retry_transcriber=retry_transcriber,
     )
     return p, tr
 
@@ -201,6 +204,65 @@ def test_not_found_reports_near_misses(settings, sample_video):
     assert "download_video" not in result.stage_timings
     d = result.to_dict()
     assert d["near_misses"][0]["score"] == round(result.near_misses[0].score, 2)
+
+
+# --------------------------------------------------------------------------- #
+# VAD-off retry pass
+# --------------------------------------------------------------------------- #
+def test_vad_retry_finds_match_and_warns(settings, sample_video):
+    # First pass "hears" only what the VAD let through; the retry hears the line.
+    retry = ScriptedTranscriber(TRANSCRIPT)
+    p, fast = make_pipeline(
+        settings, sample_video, "loud music and explosions only", retry_transcriber=retry
+    )
+    result = p.run(PipelineRequest(source=str(sample_video), dialogue=DIALOGUE))
+    assert result.status is ResultStatus.FOUND
+    assert fast.pulled == 5  # first pass consumed fully, found nothing
+    assert retry.pulled < len(TRANSCRIPT.split())  # retry still stops early
+    assert result.match.start == pytest.approx(0.6)
+    assert any("voice-activity" in w for w in result.warnings)
+
+
+def test_vad_retry_miss_reports_near_misses_from_better_pass(settings, sample_video):
+    retry = ScriptedTranscriber("my mind is elsewhere during stagnation season")
+    p, fast = make_pipeline(settings, sample_video, "completely unrelated words here", retry_transcriber=retry)
+    result = p.run(PipelineRequest(source=str(sample_video), dialogue=DIALOGUE))
+    assert result.status is ResultStatus.NOT_FOUND
+    assert fast.pulled == 4 and retry.pulled == 7  # both passes consumed fully
+    # near misses come from the retry pass, which scored higher
+    assert result.near_misses and "stagnation" in result.near_misses[0].matched_text
+    assert not result.warnings  # the "found only without VAD" warning is for hits only
+
+
+def test_no_vad_retry_when_not_configured(settings, sample_video):
+    p, tr = make_pipeline(settings, sample_video, "completely unrelated words here")
+    assert p.retry_transcriber is None
+    result = p.run(PipelineRequest(source=str(sample_video), dialogue=DIALOGUE))
+    assert result.status is ResultStatus.NOT_FOUND
+    assert tr.pulled == 4  # single pass only
+
+
+def test_default_pipeline_builds_no_vad_retry_transcriber(settings, sample_video):
+    from dialogue_locator.transcription.faster_whisper import FasterWhisperTranscriber
+
+    # Default build (no injected transcriber): retry twin exists, same model, VAD off.
+    p = DialoguePipeline(settings, downloader=FakeDownloader(sample_video), verifiers=[])
+    assert isinstance(p.retry_transcriber, FasterWhisperTranscriber)
+    assert p.retry_transcriber._config.vad_filter is False
+    assert p.fast_transcriber._config.vad_filter is True
+
+    # Disabled via config, or pointless because the VAD is already off: no retry twin.
+    s_off = settings.model_copy(update={"whisper": settings.whisper.model_copy(update={"retry_without_vad": False})})
+    assert DialoguePipeline(s_off, downloader=FakeDownloader(sample_video), verifiers=[]).retry_transcriber is None
+    s_novad = settings.model_copy(update={"whisper": settings.whisper.model_copy(update={"vad_filter": False})})
+    assert DialoguePipeline(s_novad, downloader=FakeDownloader(sample_video), verifiers=[]).retry_transcriber is None
+
+
+def test_default_verify_transcriber_runs_without_vad(settings):
+    from dialogue_locator.pipeline.pipeline import build_default_verifiers
+
+    verifiers = build_default_verifiers(settings)
+    assert verifiers and verifiers[0]._transcriber._config.vad_filter is False
 
 
 # --------------------------------------------------------------------------- #

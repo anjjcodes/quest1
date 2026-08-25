@@ -16,6 +16,7 @@ Design notes
 from __future__ import annotations
 
 import logging
+import os
 import threading
 from collections.abc import Iterator
 from dataclasses import dataclass
@@ -52,11 +53,15 @@ class WhisperModelCache:
         self._lock = threading.Lock()
 
     def get(self, model_name: str, config: WhisperConfig) -> Any:
+        # 0 = use every core: ctranslate2's own default is 4 intra-op threads,
+        # which leaves half an 8-core machine idle. Resolved here so the cache
+        # key holds the effective value.
+        cpu_threads = config.cpu_threads or (os.cpu_count() or 4)
         key = _ModelKey(
             model_name,
             config.device,
             config.compute_type,
-            config.cpu_threads,
+            cpu_threads,
             str(config.download_root) if config.download_root else None,
         )
         with self._lock:
@@ -82,10 +87,11 @@ class WhisperModelCache:
             ) from exc
 
         logger.info(
-            "Loading Whisper model '%s' (device=%s, compute_type=%s) ...",
+            "Loading Whisper model '%s' (device=%s, compute_type=%s, cpu_threads=%d) ...",
             key.name,
             key.device,
             key.compute_type,
+            key.cpu_threads,
         )
         try:
             model = WhisperModel(

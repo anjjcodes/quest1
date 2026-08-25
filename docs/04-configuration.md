@@ -26,6 +26,7 @@ out-of-range threshold or unknown device is a startup error, not a runtime surpr
 | Env variable | Field | Default | Type | Description |
 |---|---|---|---|---|
 | `DL_DOWNLOAD__MAX_HEIGHT` | `download.max_height` | `720` | `int` | Maximum video height to download. Lower = faster download; the extracted frame will have this resolution. |
+| `DL_DOWNLOAD__PROGRESS_INTERVAL_SECONDS` | `download.progress_interval_seconds` | `2.0` | `float` | Minimum seconds between download progress events. Time-based so a slow host still shows movement (MB, speed, ETA) instead of minutes-long silent percent buckets. |
 | `DL_DOWNLOAD__SOCKET_TIMEOUT_SECONDS` | `download.socket_timeout_seconds` | `30` | `int` |  |
 | `DL_DOWNLOAD__RETRIES` | `download.retries` | `3` | `int` |  |
 | `DL_DOWNLOAD__CONTAINER` | `download.container` | `mp4` | `str` | Preferred container. Ensures a format OpenCV/FFmpeg can seek in. |
@@ -38,11 +39,12 @@ out-of-range threshold or unknown device is a startup error, not a runtime surpr
 | `DL_WHISPER__VERIFY_MODEL` | `whisper.verify_model` | `medium` | `str` | Model for the verification pass. |
 | `DL_WHISPER__DEVICE` | `whisper.device` | `auto` | `Literal['auto', 'cpu', 'cuda']` |  |
 | `DL_WHISPER__COMPUTE_TYPE` | `whisper.compute_type` | `int8` | `str` | ctranslate2 compute type. int8 is fastest on CPU (incl. Apple Silicon); use float16 or int8_float16 on CUDA GPUs; float32 for maximum accuracy. |
-| `DL_WHISPER__CPU_THREADS` | `whisper.cpu_threads` | `0` | `int` | 0 = let ctranslate2 decide. |
+| `DL_WHISPER__CPU_THREADS` | `whisper.cpu_threads` | `0` | `int` | 0 = use all CPU cores (ctranslate2's own default is only 4, leaving most of a modern CPU idle). |
 | `DL_WHISPER__LANGUAGE` | `whisper.language` | `en` | `str | None` | Force a language (ISO 639-1) or None to auto-detect. Forcing avoids a detection step and mis-detections on music intros. |
 | `DL_WHISPER__BEAM_SIZE` | `whisper.beam_size` | `5` | `int` |  |
 | `DL_WHISPER__VAD_FILTER` | `whisper.vad_filter` | `True` | `bool` | Skip silent regions. Speeds up long videos with quiet stretches. |
 | `DL_WHISPER__VAD_MIN_SILENCE_MS` | `whisper.vad_min_silence_ms` | `500` | `int` |  |
+| `DL_WHISPER__RETRY_WITHOUT_VAD` | `whisper.retry_without_vad` | `True` | `bool` | If the streaming pass ends with no match while the VAD is on, re-run the scan once with the VAD disabled before reporting `not_found`. Loud music/effects can make the VAD discard real speech; the extra pass is paid only on a miss. |
 | `DL_WHISPER__CONDITION_ON_PREVIOUS_TEXT` | `whisper.condition_on_previous_text` | `False` | `bool` | False reduces hallucination loops in long streams. |
 | `DL_WHISPER__DOWNLOAD_ROOT` | `whisper.download_root` | `None` | `Path | None` | Where to cache model weights. None = Hugging Face default cache. |
 | `DL_MATCHING__MATCH_THRESHOLD` | `matching.match_threshold` | `80.0` | `float` | Minimum RapidFuzz score (0-100) for a window to count as a match. |

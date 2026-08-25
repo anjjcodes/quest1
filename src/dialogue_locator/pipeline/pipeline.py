@@ -90,7 +90,11 @@ def build_default_verifiers(settings: Settings, verify_transcriber: Transcriber 
     """The V1 verifier chain. V2 appends its visual verifier here."""
     if not settings.verification.enabled:
         return []
-    transcriber = verify_transcriber or FasterWhisperTranscriber(settings.whisper.verify_model, settings.whisper)
+    # The verifier re-hears a short window already known to contain speech, so the
+    # VAD has nothing to save there - but under loud music it can delete the very
+    # line being verified (it cost a perfect match a rejection on Infinity War).
+    no_vad = settings.whisper.model_copy(update={"vad_filter": False})
+    transcriber = verify_transcriber or FasterWhisperTranscriber(settings.whisper.verify_model, no_vad)
     return [AsrVerifier(transcriber, settings.matching, settings.verification)]
 
 
@@ -105,6 +109,7 @@ class DialoguePipeline:
         audio_extractor: AudioExtractor | None = None,
         fast_transcriber: Transcriber | None = None,
         verifiers: list[Verifier] | None = None,
+        retry_transcriber: Transcriber | None = None,
         frame_extractor: FrameExtractor | None = None,
     ) -> None:
         self.settings = settings
@@ -113,6 +118,15 @@ class DialoguePipeline:
         self.fast_transcriber = fast_transcriber or FasterWhisperTranscriber(
             settings.whisper.fast_model, settings.whisper
         )
+        if retry_transcriber is not None:
+            self.retry_transcriber: Transcriber | None = retry_transcriber
+        elif fast_transcriber is None and settings.whisper.vad_filter and settings.whisper.retry_without_vad:
+            # Same weights as fast_transcriber via WhisperModelCache (the VAD flag is
+            # not part of the cache key), so this costs no extra memory or load time.
+            no_vad = settings.whisper.model_copy(update={"vad_filter": False})
+            self.retry_transcriber = FasterWhisperTranscriber(settings.whisper.fast_model, no_vad)
+        else:
+            self.retry_transcriber = None
         self.verifiers = build_default_verifiers(settings) if verifiers is None else verifiers
         self.frame_extractor = frame_extractor or FrameExtractor(settings.frame, settings.audio.ffmpeg_binary)
 
@@ -221,21 +235,31 @@ class _Run:
         self._begin(PipelineStage.TRANSCRIPTION, "Loading speech model")
         self.p.fast_transcriber.warm_up()
         self._emit(PipelineStage.TRANSCRIPTION, "Listening for the dialogue", 0.0, {})
-        match: MatchCandidate | None = None
-        last_word_end = 0.0
-        stream = self.p.fast_transcriber.transcribe(samples, offset=0.0, progress=self.progress)
-        try:
-            for word in stream:
-                last_word_end = word.end
-                match = matcher.feed(word)
-                if match is not None:
-                    break
-                if self.should_cancel():
-                    raise PipelineCancelledError("Cancelled during transcription")
-        finally:
-            stream.close()  # stops the ASR decoder immediately
-        if match is None:
-            match = matcher.finish()
+        match, last_word_end = self._scan(self.p.fast_transcriber, samples, matcher)
+        if match is None and self.p.retry_transcriber is not None:
+            # The VAD can discard real speech buried under loud music/effects, so a
+            # clean miss is re-checked once with the VAD off (decision #24) before
+            # the pipeline reports not_found.
+            logger.warning(
+                "No match with VAD on (best score %.1f); retrying without voice-activity filter",
+                matcher.best_score,
+            )
+            self._emit(
+                PipelineStage.TRANSCRIPTION,
+                "No match yet - listening again without the voice-activity filter",
+                0.0,
+                {"best_score": matcher.best_score},
+            )
+            retry_matcher = StreamingMatcher(self.req.dialogue, self.settings.matching)
+            match, retry_end = self._scan(self.p.retry_transcriber, samples, retry_matcher)
+            last_word_end = max(last_word_end, retry_end)
+            if match is not None:
+                self.warnings.append(
+                    "Found only with the voice-activity filter disabled; "
+                    "the line sits under loud background audio."
+                )
+            if retry_matcher.best_score >= matcher.best_score:
+                matcher = retry_matcher  # report near misses from the better pass
         self._end(PipelineStage.TRANSCRIPTION)
         self.timings[PipelineStage.MATCHING.value] = 0.0  # folded into transcription
 
@@ -328,6 +352,32 @@ class _Run:
             self.warnings.append(warning)
             logger.warning(warning)
         return result
+
+    # ------------------------------------------------------------------ #
+    def _scan(
+        self, transcriber: Transcriber, samples: Any, matcher: StreamingMatcher
+    ) -> tuple[MatchCandidate | None, float]:
+        """Stream ``transcriber`` over ``samples`` through ``matcher``.
+
+        Returns the first match (or ``None``) and the end time of the last word
+        pulled from the stream; the stream is closed as soon as a match settles.
+        """
+        match: MatchCandidate | None = None
+        last_word_end = 0.0
+        stream = transcriber.transcribe(samples, offset=0.0, progress=self.progress)
+        try:
+            for word in stream:
+                last_word_end = word.end
+                match = matcher.feed(word)
+                if match is not None:
+                    break
+                if self.should_cancel():
+                    raise PipelineCancelledError("Cancelled during transcription")
+        finally:
+            stream.close()  # stops the ASR decoder immediately
+        if match is None:
+            match = matcher.finish()
+        return match, last_word_end
 
     # ------------------------------------------------------------------ #
     def _begin(self, stage: PipelineStage, message: str) -> None:

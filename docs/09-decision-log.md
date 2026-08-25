@@ -27,12 +27,13 @@ questions.
 | 20 | **Native arm64 Python 3.12 venv** | Homebrew (x86_64/Rosetta) Python 3.14 | `onnxruntime` has no macOS x86_64 wheels → faster-whisper won't install; native also runs Whisper faster. Encoded in `run_server.sh`. |
 | 21 | Model warm-up in a **background thread** at server start | block startup | UI reachable immediately; the first job waits on the model-cache lock instead. |
 | 22 | Web UI is **vanilla HTML/CSS/JS**, light theme, large type | a framework | No build step, served by the same process, one file each; easy to hand-edit. |
+| 23 | **Verification stays unconditional** — no confidence ladder that skips or downgrades the large model on a high first-pass score | base→small→medium cascade gated on fuzzy score | The fuzzy score is *text* confidence, not *timing* confidence: JFK scored 94.4 with a 6.4 s-wrong timestamp (repetition collapse) that only a clean re-transcription catches. Small models agreeing are correlated judges, not independent evidence. Verification is a bounded 30–60 s that is <5 % of a long job (Amdahl). If escalation is ever added, invert it: re-run the streaming pass with a bigger model only when nothing reaches the threshold. |
+| 24 | **VAD-off retry on not-found** — when the streaming pass ends below the threshold, one extra pass with the voice-activity filter disabled runs before reporting `not_found` (`whisper.retry_without_vad`) | trust a single pass; or ship with VAD off by default | The Silero VAD drops real speech buried under loud score/effects: an Infinity War line at 02:00:20 vanished with VAD on (base, small **and** medium all produced the same 18 words in that 5-minute window — the VAD trims the audio before any model hears it) yet scored 100.0 with VAD off. VAD stays the default because it skips silence (speed) and starves hallucinations on music (match safety); the retry costs one extra scan only when the answer would otherwise be a miss. This is the inversion decision #23 anticipated — escalate the *preprocessing*, not the model. For the same reason the **verify model always runs its ±20 s window with the VAD off**: the window is known to contain speech, and with VAD on `medium` deleted the very line under test and rejected a perfect match (59.7 vs 100.0); with VAD off it confirms at 100.0. |
 
 ## Known limitations (V1)
 
-* Whole video is downloaded before transcription starts (see Extending § D for the plan).
-* Download progress events fire every 5 % of the file — too sparse for very large files
-  (time-based throttling with MB/s and ETA is the planned fix).
+* Downloads use a single connection; hosts that throttle per connection (e.g. ok.ru at
+  ~200 KB/s) are slow. Parallel fragments / an external downloader (aria2c) are the planned fix.
 * English-only normalisation (non-ASCII letters dropped) — one regex to widen.
 * No visual "on camera" check yet — that is V2, and its seam is `verification.base.Verifier`.
 * Jobs are forgotten on server restart; result files persist.

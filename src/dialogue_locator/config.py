@@ -52,6 +52,13 @@ class DownloadConfig(BaseModel):
         description="Seconds of video downloaded either side of the verified match "
         "window by the clip fetch, so the target frame is safely inside the clip.",
     )
+    progress_interval_seconds: float = Field(
+        2.0,
+        gt=0,
+        description="Minimum seconds between download progress events. Time-based so a "
+        "slow host still shows movement (MB, speed, ETA) instead of minutes-long silent "
+        "percent buckets.",
+    )
     socket_timeout_seconds: int = Field(30, ge=1)
     retries: int = Field(3, ge=0)
     container: str = Field(
@@ -92,7 +99,12 @@ class WhisperConfig(BaseModel):
         description="ctranslate2 compute type. int8 is fastest on CPU (incl. Apple Silicon); "
         "use float16 or int8_float16 on CUDA GPUs; float32 for maximum accuracy.",
     )
-    cpu_threads: int = Field(0, ge=0, description="0 = let ctranslate2 decide.")
+    cpu_threads: int = Field(
+        0,
+        ge=0,
+        description="Intra-op threads for CPU inference. 0 = use all CPU cores "
+        "(ctranslate2's own default is only 4, leaving most of a modern CPU idle).",
+    )
     language: str | None = Field(
         "en",
         description="Force a language (ISO 639-1) or None to auto-detect. Forcing "
@@ -104,6 +116,13 @@ class WhisperConfig(BaseModel):
         description="Skip silent regions. Speeds up long videos with quiet stretches.",
     )
     vad_min_silence_ms: int = Field(500, ge=0)
+    retry_without_vad: bool = Field(
+        True,
+        description="If the streaming pass ends with no match while vad_filter is on, "
+        "re-run the scan once with the VAD disabled before reporting not_found. Loud "
+        "music/effects can make the VAD discard real speech (e.g. action scenes); the "
+        "retry hears everything, at the cost of one extra pass paid only on a miss.",
+    )
     condition_on_previous_text: bool = Field(
         False,
         description="False reduces hallucination loops in long streams.",

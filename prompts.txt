@@ -237,3 +237,13 @@ i think now max height from config doesnt need, cause we are going to search aud
 
 Prompt 27:
 only after verify the clip with high wispher model we should go download only that clip, beacuse this then reduces downloading whole clip from 55mins to 6sec per clip.
+
+Prompt 28:  [pasted the not_found result JSON for an Infinity War upload (149 min), dialogue
+"you're not the only one cursed with knowledge"; best near-miss 63.3 at 01:20:43]
+{ "status": "not_found", (...) "near_misses": [ (...) ] }
+but the dialouge is at 2:00:00 why can it find it
+
+Prompt 29:  [the diagnosis showed the VAD filter dropping the line under the loud battle score
+(all three models got the same 18 words in that 5-minute window; VAD off heard it at 100.0);
+approving the proposed retry-without-VAD fallback pass]
+okay

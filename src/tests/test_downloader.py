@@ -319,3 +319,33 @@ def test_real_youtube_video_clip(tmp_path: Path):
 def test_real_invalid_video(tmp_path: Path):
     with expect_error(DownloadError):
         VideoDownloader(DownloadConfig()).fetch("https://www.youtube.com/watch?v=xxxxxxxxxxx", tmp_path / "bad")
+
+
+# --------------------------------------------------------------------------- #
+# time-throttled progress
+# --------------------------------------------------------------------------- #
+def test_progress_hook_time_throttled_with_speed_and_eta(monkeypatch):
+    clock = {"t": 100.0}
+    monkeypatch.setattr(dl_module.time, "monotonic", lambda: clock["t"])
+    events: list[ProgressEvent] = []
+    hook = VideoDownloader(DownloadConfig(progress_interval_seconds=2.0))._make_progress_hook(events.append)
+
+    hook({"status": "downloading", "downloaded_bytes": 1_000_000, "total_bytes": 10_000_000,
+          "speed": 195_000.0, "eta": 46})
+    hook({"status": "downloading", "downloaded_bytes": 2_000_000, "total_bytes": 10_000_000})  # too soon
+    clock["t"] += 2.1
+    hook({"status": "downloading", "downloaded_bytes": 3_000_000, "total_bytes_estimate": 10_000_000,
+          "speed": 2_400_000.0, "eta": 3665})
+    assert len(events) == 2  # the middle call was throttled away
+    assert events[0].message == "Downloading 10% \N{MIDDLE DOT} 1.0/10.0 MB \N{MIDDLE DOT} 195 KB/s \N{MIDDLE DOT} ETA 0:46"
+    assert events[0].fraction == pytest.approx(0.1)
+    assert events[0].details["speed_bps"] == 195_000 and events[0].details["eta_seconds"] == 46
+    assert events[1].message == "Downloading 30% \N{MIDDLE DOT} 3.0/10.0 MB \N{MIDDLE DOT} 2.4 MB/s \N{MIDDLE DOT} ETA 1:01:05"
+
+    # 'finished' resets the throttle so the next file (e.g. audio after video)
+    # reports at once; without a total only the size is shown.
+    hook({"status": "finished"})
+    assert events[-1].fraction == 1.0
+    hook({"status": "downloading", "downloaded_bytes": 500_000})
+    assert events[-1].message == "Downloading 0.5 MB"
+    assert events[-1].fraction is None
