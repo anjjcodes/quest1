@@ -10,6 +10,7 @@ faster-whisper>=1.0.3
 rapidfuzz>=3.9
 opencv-python-headless>=4.10
 numpy>=1.26
+mediapipe>=0.10.14,<1.0  # 1.x FaceDetector aborts on macOS (Metal helper init fails)
 
 # Dev / test
 pytest>=8.2

@@ -14,11 +14,14 @@ from dialogue_locator.config import Settings
 from dialogue_locator.exceptions import (
     DialogueLocatorError,
     DownloadError,
+    FaceDetectionError,
     InvalidDialogueError,
     InvalidURLError,
     PipelineCancelledError,
 )
 from dialogue_locator.models import (
+    FaceBox,
+    FaceDetectionResult,
     MatchCandidate,
     MediaInfo,
     PipelineStage,
@@ -112,13 +115,35 @@ class ScriptedVerifier(Verifier):
         return VerificationOutcome(self.name, self.status, score=self.score, refined=refined, message="scripted")
 
 
+ONE_FACE = (FaceBox(x=10, y=10, width=50, height=50, confidence=0.9),)
+
+
+class FakeFaceDetector:
+    def __init__(self, faces: tuple[FaceBox, ...] = ONE_FACE, error: Exception | None = None):
+        self.faces = faces
+        self.error = error
+        self.paths: list[Path] = []
+
+    def detect_file(self, path: Path) -> FaceDetectionResult:
+        self.paths.append(path)
+        if self.error:
+            raise self.error
+        return FaceDetectionResult(faces=self.faces, image_width=320, image_height=240)
+
+
 @pytest.fixture
 def settings(tmp_path: Path) -> Settings:
     return Settings(storage={"work_dir": tmp_path / "work", "output_dir": tmp_path / "out"})
 
 
 def make_pipeline(
-    settings: Settings, sample_video: Path, transcript: str, verifiers=None, downloader=None, retry_transcriber=None
+    settings: Settings,
+    sample_video: Path,
+    transcript: str,
+    verifiers=None,
+    downloader=None,
+    retry_transcriber=None,
+    face_detector=None,
 ) -> tuple[DialoguePipeline, ScriptedTranscriber]:
     tr = ScriptedTranscriber(transcript)
     p = DialoguePipeline(
@@ -127,6 +152,7 @@ def make_pipeline(
         fast_transcriber=tr,
         verifiers=[] if verifiers is None else verifiers,
         retry_transcriber=retry_transcriber,
+        face_detector=face_detector or FakeFaceDetector(),
     )
     return p, tr
 
@@ -163,7 +189,8 @@ def test_found_end_to_end(settings, sample_video, tmp_path):
     assert result.transcribed_seconds == pytest.approx((tr.pulled - 1) * 0.1 + 0.08, abs=1e-6)
     assert tr.warmed == 1
     # timings + progress ("download" = search fetch, "download_video" = full-quality fetch)
-    for stage in ("input", "download", "download_video", "audio", "transcription", "verification", "frame", "total"):
+    for stage in ("input", "download", "download_video", "audio", "transcription", "verification", "frame",
+                  "face_detection", "total"):
         assert stage in result.stage_timings
     stages = [e.stage for e in events]
     assert stages[0] is PipelineStage.INPUT and stages[-1] is PipelineStage.DONE
@@ -289,6 +316,60 @@ def test_url_with_audio_only_search_media_still_fetches_video(settings, sample_v
     assert result.found
     assert dl.calls == 1 and dl.video_calls == 1
     assert result.frame is not None and result.video is not None
+
+
+# --------------------------------------------------------------------------- #
+# face detection (V2)
+# --------------------------------------------------------------------------- #
+def test_face_detected_on_extracted_frame(settings, sample_video):
+    fd = FakeFaceDetector()
+    p, _ = make_pipeline(settings, sample_video, TRANSCRIPT, face_detector=fd)
+    events: list[ProgressEvent] = []
+    req = PipelineRequest(source=str(sample_video), dialogue=DIALOGUE)
+    result = p.run(req, progress=events.append)
+    assert result.face_present is True
+    assert result.face_detection.faces == ONE_FACE
+    assert fd.paths == [result.frame.image_path]  # ran on the saved output frame
+    face_events = [e for e in events if e.stage is PipelineStage.FACE_DETECTION]
+    assert any("face(s) visible" in e.message for e in face_events)
+    d = result.to_dict()
+    assert d["face_present"] is True and d["face_detection"]["face_count"] == 1
+
+
+def test_no_face_makes_result_not_onscreen(settings, sample_video):
+    no_faces = FakeFaceDetector(faces=())
+    p, _ = make_pipeline(settings, sample_video, TRANSCRIPT, face_detector=no_faces)
+    result = p.run(PipelineRequest(source=str(sample_video), dialogue=DIALOGUE))
+    assert result.status is ResultStatus.NOT_ONSCREEN and not result.found
+    assert result.face_present is False and result.face_detection.face_present is False
+    # the localisation details are kept for transparency
+    assert result.match is not None and result.frame is not None and result.timestamp is not None
+    assert result.warnings == []  # "no face" is a verdict, not a failure
+    d = result.to_dict()
+    assert d["status"] == "not_onscreen" and d["face_present"] is False
+
+
+def test_face_detection_failure_warns_and_keeps_result(settings, sample_video):
+    fd = FakeFaceDetector(error=FaceDetectionError("model download failed"))
+    p, _ = make_pipeline(settings, sample_video, TRANSCRIPT, face_detector=fd)
+    logger.info(">>> expecting a WARNING: face detector failed, localisation kept")
+    result = p.run(PipelineRequest(source=str(sample_video), dialogue=DIALOGUE))
+    # fails open: a face-check outage never hides a real localisation
+    assert result.status is ResultStatus.FOUND and result.frame is not None
+    assert result.face_detection is None and result.face_present is None
+    assert any("Face check failed" in w for w in result.warnings)
+    assert result.to_dict()["face_present"] is None
+    logger.info("<<< warning recorded as expected")
+
+
+def test_no_face_detection_without_frame(settings, sample_wav):
+    fd = FakeFaceDetector()
+    dl = FakeDownloader(sample_wav, has_video=False)
+    p, _ = make_pipeline(settings, sample_wav, TRANSCRIPT, downloader=dl, face_detector=fd)
+    result = p.run(PipelineRequest(source=str(sample_wav), dialogue=DIALOGUE))
+    assert result.found and result.frame is None
+    assert fd.paths == [] and result.face_detection is None
+    assert "face_detection" not in result.stage_timings
 
 
 # --------------------------------------------------------------------------- #

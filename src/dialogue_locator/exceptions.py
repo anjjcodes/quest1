@@ -136,3 +136,9 @@ class FrameExtractionError(DialogueLocatorError):
     """The frame at the resolved timestamp could not be read or written."""
 
     stage = "frame"
+
+
+class FaceDetectionError(DialogueLocatorError):
+    """The face detector could not run (model missing/undownloadable, bad image)."""
+
+    stage = "face_detection"

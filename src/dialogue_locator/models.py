@@ -12,6 +12,7 @@ Data flow between stages::
     Matcher           -> MatchCandidate | near-miss list
     Verifier          -> VerificationOutcome           (0..n, one per verifier)
     FrameExtractor    -> FrameInfo
+    FaceDetector      -> FaceDetectionResult           (V2: faces in a frame)
     Pipeline          -> LocalizationResult            (aggregates all of the above)
 """
 
@@ -52,6 +53,7 @@ class PipelineStage(str, Enum):
     DOWNLOAD_VIDEO = "download_video"  # full-quality fetch, only after a match
     VERIFICATION = "verification"
     FRAME = "frame"
+    FACE_DETECTION = "face_detection"  # V2: is a human face visible in the frame?
     DONE = "done"
 
 
@@ -248,11 +250,56 @@ class FrameInfo:
 
 
 # --------------------------------------------------------------------------- #
+# Face detection (V2)
+# --------------------------------------------------------------------------- #
+@dataclass(frozen=True)
+class FaceBox:
+    """One detected face: pixel bounding box (top-left origin) + confidence."""
+
+    x: int
+    y: int
+    width: int
+    height: int
+    confidence: float  # detector score, 0-1
+
+    def to_dict(self) -> dict[str, Any]:
+        data = asdict(self)
+        data["confidence"] = round(self.confidence, 3)
+        return data
+
+
+@dataclass(frozen=True)
+class FaceDetectionResult:
+    """Faces found in a single frame, best-scoring first."""
+
+    faces: tuple[FaceBox, ...]
+    image_width: int
+    image_height: int
+
+    @property
+    def face_present(self) -> bool:
+        return len(self.faces) > 0
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "face_present": self.face_present,
+            "face_count": len(self.faces),
+            "faces": [f.to_dict() for f in self.faces],
+            "image_width": self.image_width,
+            "image_height": self.image_height,
+        }
+
+
+# --------------------------------------------------------------------------- #
 # Final result
 # --------------------------------------------------------------------------- #
 class ResultStatus(str, Enum):
     FOUND = "found"
     NOT_FOUND = "not_found"
+    # V2: the dialogue was heard at the timestamp, but no human face is visible
+    # in the frame - it is not an *onscreen* dialogue. Match/frame details are
+    # still populated so the caller can see what was found.
+    NOT_ONSCREEN = "not_onscreen"
 
 
 @dataclass
@@ -264,11 +311,12 @@ class LocalizationResult:
     source_url: str
     video: VideoInfo | None = None
 
-    # Populated when status == FOUND
+    # Populated when the dialogue was localised (status FOUND or NOT_ONSCREEN)
     match: MatchCandidate | None = None  # the final (possibly refined) localisation
     first_pass: MatchCandidate | None = None  # the fast-model candidate before verification
     verifications: list[VerificationOutcome] = field(default_factory=list)
     frame: FrameInfo | None = None
+    face_detection: FaceDetectionResult | None = None  # V2; None = check not run
 
     # Populated when status == NOT_FOUND
     near_misses: list[MatchCandidate] = field(default_factory=list)
@@ -299,6 +347,11 @@ class LocalizationResult:
     def matched_text(self) -> str | None:
         return self.match.matched_text if self.match else None
 
+    @property
+    def face_present(self) -> bool | None:
+        """Whether a face is visible in the extracted frame (None = check not run)."""
+        return self.face_detection.face_present if self.face_detection else None
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "status": self.status.value,
@@ -313,6 +366,8 @@ class LocalizationResult:
             "first_pass": self.first_pass.to_dict() if self.first_pass else None,
             "verifications": [v.to_dict() for v in self.verifications],
             "frame": self.frame.to_dict() if self.frame else None,
+            "face_present": self.face_present,
+            "face_detection": self.face_detection.to_dict() if self.face_detection else None,
             "near_misses": [m.to_dict() for m in self.near_misses],
             "warnings": list(self.warnings),
             "stage_timings": {k: round(v, 3) for k, v in self.stage_timings.items()},

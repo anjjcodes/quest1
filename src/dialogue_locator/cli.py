@@ -9,7 +9,8 @@ Prints the result in the format requested by the problem statement::
     Text      : "My mind rebels at stagnation"
     Image     : data/output/<job>/frame.jpg
 
-Exit codes: 0 found, 2 not found (near-misses printed), 1 error.
+Exit codes: 0 found, 2 not found (near-misses printed), 3 found in audio but
+no face on camera (not an onscreen dialogue; details still printed), 1 error.
 """
 
 from __future__ import annotations
@@ -22,11 +23,11 @@ from pathlib import Path
 from dialogue_locator.config import Settings, get_settings
 from dialogue_locator.exceptions import DialogueLocatorError
 from dialogue_locator.logging_config import configure_logging
-from dialogue_locator.models import LocalizationResult, ProgressEvent
+from dialogue_locator.models import LocalizationResult, ProgressEvent, ResultStatus
 from dialogue_locator.pipeline import DialoguePipeline, PipelineRequest, save_result
 from dialogue_locator.pipeline.pipeline import RESULT_FILENAME
 
-EXIT_FOUND, EXIT_ERROR, EXIT_NOT_FOUND = 0, 1, 2
+EXIT_FOUND, EXIT_ERROR, EXIT_NOT_FOUND, EXIT_NOT_ONSCREEN = 0, 1, 2, 3
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -76,14 +77,22 @@ def apply_overrides(settings: Settings, args: argparse.Namespace) -> Settings:
 
 
 def format_result(result: LocalizationResult) -> str:
-    if result.found:
-        lines = [
+    if result.match is not None:  # localised: FOUND or NOT_ONSCREEN
+        lines = []
+        if result.status is ResultStatus.NOT_ONSCREEN:
+            lines.append("Verdict   : Not an onscreen dialogue - no face in the matched frame")
+        lines += [
             f"Timestamp : {result.timestamp}",
             f"Frame     : {result.frame_number}",
             f'Text      : "{result.matched_text}"',
             f"Image     : {result.frame.image_path if result.frame else '-'}",
             f"Score     : {result.match.score:.1f}" if result.match else "",
         ]
+        if result.face_present is True:
+            faces = result.face_detection.faces
+            lines.append(f"Face      : {len(faces)} detected (best {faces[0].confidence:.2f})")
+        elif result.face_present is False:
+            lines.append("Face      : none detected")
         for v in result.verifications:
             lines.append(f"Verify    : {v.verifier} -> {v.status.value}" + (f" ({v.score:.1f})" if v.score is not None else ""))
     else:
@@ -127,7 +136,9 @@ def main(argv: list[str] | None = None, pipeline_factory=DialoguePipeline) -> in
     else:
         print(format_result(result))
         print(f"Result    : {out_path}")
-    return EXIT_FOUND if result.found else EXIT_NOT_FOUND
+    if result.found:
+        return EXIT_FOUND
+    return EXIT_NOT_ONSCREEN if result.status is ResultStatus.NOT_ONSCREEN else EXIT_NOT_FOUND
 
 
 if __name__ == "__main__":  # pragma: no cover

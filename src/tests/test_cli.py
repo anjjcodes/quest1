@@ -6,7 +6,14 @@ import pytest
 from dialogue_locator import cli
 from dialogue_locator.config import Settings, reset_settings_cache
 from dialogue_locator.exceptions import DownloadError
-from dialogue_locator.models import FrameInfo, LocalizationResult, MatchCandidate, ResultStatus
+from dialogue_locator.models import (
+    FaceBox,
+    FaceDetectionResult,
+    FrameInfo,
+    LocalizationResult,
+    MatchCandidate,
+    ResultStatus,
+)
 
 
 def _found() -> LocalizationResult:
@@ -16,6 +23,13 @@ def _found() -> LocalizationResult:
         frame=FrameInfo(frame_number=7812, timestamp=312.48, fps=25.0, image_path=Path("out/frame.jpg")),
         transcribed_seconds=320.0,
     )
+
+
+def _not_onscreen() -> LocalizationResult:
+    result = _found()
+    result.status = ResultStatus.NOT_ONSCREEN
+    result.face_detection = FaceDetectionResult(faces=(), image_width=1920, image_height=960)
+    return result
 
 
 def _not_found() -> LocalizationResult:
@@ -60,9 +74,36 @@ def test_format_found():
     assert "Scanned   : 320.0s" in text
 
 
+def test_format_found_with_face():
+    result = _found()
+    result.face_detection = FaceDetectionResult(
+        faces=(FaceBox(x=1, y=2, width=3, height=4, confidence=0.97),),
+        image_width=320,
+        image_height=240,
+    )
+    text = cli.format_result(result)
+    assert "Face      : 1 detected (best 0.97)" in text
+    assert "Verdict" not in text
+
+
+def test_format_not_onscreen():
+    text = cli.format_result(_not_onscreen())
+    assert text.startswith("Verdict   : Not an onscreen dialogue")
+    assert "Face      : none detected" in text
+    # the localisation details are still printed below the verdict
+    assert "Timestamp : 00:05:12.480" in text and "Frame     : 7812" in text
+
+
 def test_format_not_found():
     text = cli.format_result(_not_found())
     assert 'Not found : "nothing here"' in text and "44.1" in text and "00:00:08.840" in text
+
+
+def test_main_not_onscreen_exit_code(capsys):
+    FakePipeline.result, FakePipeline.error = _not_onscreen(), None
+    code = cli.main(["https://ok.ru/video/1", "some words", "-q"], pipeline_factory=FakePipeline)
+    assert code == cli.EXIT_NOT_ONSCREEN
+    assert "Not an onscreen dialogue" in capsys.readouterr().out
 
 
 def test_main_found_writes_result_json(capsys, tmp_path):

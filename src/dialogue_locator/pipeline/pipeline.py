@@ -11,6 +11,9 @@ Stages, in order (each maps to a :class:`PipelineStage`)::
     download_video VideoDownloader.fetch_video_clip -> VideoInfo (a few seconds of
                    full-quality video around the *verified* timestamp)
     frame          FrameExtractor    -> FrameInfo (image on disk)
+    face_detection FaceDetector     -> FaceDetectionResult (V2: is a human face
+                   visible in the extracted frame? No face -> status becomes
+                   NOT_ONSCREEN; a failed check fails open with a warning)
     done
 
 The search stages run on a cheap audio-first download; full-quality video is
@@ -44,7 +47,11 @@ from pathlib import Path
 from typing import Any
 
 from dialogue_locator.config import Settings
-from dialogue_locator.exceptions import DialogueLocatorError, PipelineCancelledError
+from dialogue_locator.exceptions import (
+    DialogueLocatorError,
+    FaceDetectionError,
+    PipelineCancelledError,
+)
 from dialogue_locator.matching.matcher import StreamingMatcher, TargetDialogue
 from dialogue_locator.media.audio import AudioExtractor
 from dialogue_locator.media.downloader import VideoDownloader, is_url, validate_url
@@ -64,6 +71,7 @@ from dialogue_locator.transcription.base import Transcriber, load_pcm
 from dialogue_locator.transcription.faster_whisper import FasterWhisperTranscriber
 from dialogue_locator.verification.asr_verifier import AsrVerifier
 from dialogue_locator.verification.base import VerificationContext, Verifier
+from dialogue_locator.vision.face_detector import FaceDetector
 
 logger = logging.getLogger(__name__)
 
@@ -111,6 +119,7 @@ class DialoguePipeline:
         verifiers: list[Verifier] | None = None,
         retry_transcriber: Transcriber | None = None,
         frame_extractor: FrameExtractor | None = None,
+        face_detector: FaceDetector | None = None,
     ) -> None:
         self.settings = settings
         self.downloader = downloader or VideoDownloader(settings.download, settings.audio.ffprobe_binary)
@@ -129,6 +138,7 @@ class DialoguePipeline:
             self.retry_transcriber = None
         self.verifiers = build_default_verifiers(settings) if verifiers is None else verifiers
         self.frame_extractor = frame_extractor or FrameExtractor(settings.frame, settings.audio.ffmpeg_binary)
+        self.face_detector = face_detector or FaceDetector(settings.face_detection)
 
     # ------------------------------------------------------------------ #
     def warm_up(self) -> None:
@@ -347,6 +357,31 @@ class _Run:
             self.output_dir.mkdir(parents=True, exist_ok=True)
             result.frame = self.p.frame_extractor.extract(video, current.start, self.output_dir / FRAME_FILENAME)
             self._end(PipelineStage.FRAME)
+            self._check_cancel()
+
+            # ---- face detection (V2) --------------------------------------
+            # Runs on the saved output frame and gates the verdict: a match with
+            # no face on camera is reported as NOT_ONSCREEN (details are kept so
+            # the caller can inspect what was found). Fails open: if the check
+            # itself cannot run, the localisation stands, with a warning.
+            self._begin(PipelineStage.FACE_DETECTION, "Checking for a face in the frame")
+            try:
+                result.face_detection = self.p.face_detector.detect_file(result.frame.image_path)
+            except FaceDetectionError as exc:
+                warning = f"Face check failed: {exc.message}"
+                self.warnings.append(warning)
+                logger.warning("Face detection warning: %s", warning)
+                self._emit(PipelineStage.FACE_DETECTION, warning, 1.0, {"error": exc.message})
+            else:
+                detected = result.face_detection
+                if detected.face_present:
+                    message = f"{len(detected.faces)} face(s) visible in the frame"
+                else:
+                    result.status = ResultStatus.NOT_ONSCREEN
+                    message = "No face visible - not an onscreen dialogue"
+                    logger.info("No face in frame %s; verdict: not_onscreen", result.frame.image_path.name)
+                self._emit(PipelineStage.FACE_DETECTION, message, 1.0, detected.to_dict())
+            self._end(PipelineStage.FACE_DETECTION)
         else:
             warning = "Source has no video stream; returning the timestamp without a frame."
             self.warnings.append(warning)

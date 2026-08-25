@@ -68,6 +68,24 @@ class FrameSchema(BaseModel):
     height: int | None = None
 
 
+class FaceBoxSchema(BaseModel):
+    model_config = ConfigDict(extra="allow")
+    x: int
+    y: int
+    width: int
+    height: int
+    confidence: float
+
+
+class FaceDetectionSchema(BaseModel):
+    """V2: faces found in the extracted frame."""
+
+    model_config = ConfigDict(extra="allow")
+    face_present: bool
+    face_count: int
+    faces: list[FaceBoxSchema] = Field(default_factory=list)
+
+
 class ResultSchema(BaseModel):
     """Mirrors ``LocalizationResult.to_dict()``."""
 
@@ -83,6 +101,10 @@ class ResultSchema(BaseModel):
     first_pass: CandidateSchema | None = None
     verifications: list[VerificationSchema] = Field(default_factory=list)
     frame: FrameSchema | None = None
+    face_present: bool | None = Field(
+        None, description="V2: set once the face check ran on the frame; None if it did not run"
+    )
+    face_detection: FaceDetectionSchema | None = None
     near_misses: list[CandidateSchema] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
     stage_timings: dict[str, float] = Field(default_factory=dict)

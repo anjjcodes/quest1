@@ -185,6 +185,39 @@ class FrameConfig(BaseModel):
     jpeg_quality: int = Field(92, ge=1, le=100)
 
 
+class FaceDetectionConfig(BaseModel):
+    """Settings for the V2 face-presence check (MediaPipe BlazeFace).
+
+    The detector answers one question about the matched frame: is at least one
+    human face visible? MediaPipe's Tasks API needs a small ``.tflite`` model
+    file; like the Whisper weights it is fetched once on first use and cached
+    at ``model_path``.
+    """
+
+    min_detection_confidence: float = Field(
+        0.5,
+        ge=0,
+        le=1,
+        description="Minimum BlazeFace score for a detection to count as a face.",
+    )
+    model_path: Path = Field(
+        Path("data/models/blaze_face_short_range.tflite"),
+        description="Where the BlazeFace model file is cached. Downloaded from "
+        "model_url on first use if missing (~230 KB, one-time).",
+    )
+    model_url: str = Field(
+        "https://storage.googleapis.com/mediapipe-models/face_detector/"
+        "blaze_face_short_range/float16/latest/blaze_face_short_range.tflite",
+        description="Where to fetch the model file from when model_path is missing.",
+    )
+    download_timeout_seconds: int = Field(60, ge=1)
+
+    @field_validator("model_path", mode="before")
+    @classmethod
+    def _expand(cls, value: str | Path) -> Path:
+        return Path(value).expanduser()
+
+
 class StorageConfig(BaseModel):
     """Where intermediate and output files are written."""
 
@@ -245,6 +278,7 @@ class Settings(BaseSettings):
     matching: MatchingConfig = Field(default_factory=MatchingConfig)
     verification: VerificationConfig = Field(default_factory=VerificationConfig)
     frame: FrameConfig = Field(default_factory=FrameConfig)
+    face_detection: FaceDetectionConfig = Field(default_factory=FaceDetectionConfig)
     storage: StorageConfig = Field(default_factory=StorageConfig)
     server: ServerConfig = Field(default_factory=ServerConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)

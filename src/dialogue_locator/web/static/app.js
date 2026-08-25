@@ -3,10 +3,10 @@
   "use strict";
 
   const $ = (id) => document.getElementById(id);
-  const STAGES = ["input", "download", "audio", "transcription", "verification", "download_video", "frame"];
+  const STAGES = ["input", "download", "audio", "transcription", "verification", "download_video", "frame", "face_detection"];
   const POLL_MS = 1000;
   const MAX_POLL_FAILURES = 5;
-  const TIMING_COLORS = { input: "#94a3b8", download: "#60a5fa", audio: "#34d399", transcription: "#f59e0b", matching: "#f59e0b", download_video: "#3b82f6", verification: "#a78bfa", frame: "#f472b6" };
+  const TIMING_COLORS = { input: "#94a3b8", download: "#60a5fa", audio: "#34d399", transcription: "#f59e0b", matching: "#f59e0b", download_video: "#3b82f6", verification: "#a78bfa", frame: "#f472b6", face_detection: "#22d3ee" };
 
   const els = {
     form: $("job-form"), source: $("source"), dialogue: $("dialogue"), reuse: $("reuse"),
@@ -138,7 +138,8 @@
     const stage = p ? p.stage : "input";
     const idx = STAGES.indexOf(stage);
     const finished = ["done", "failed", "cancelled"].includes(job.status);
-    const notFound = job.status === "done" && job.result && job.result.status !== "found";
+    const notFound = job.status === "done" && job.result && job.result.status === "not_found";
+    const notOnscreen = job.status === "done" && job.result && job.result.status === "not_onscreen";
     const timings = (job.result && job.result.stage_timings) || {};
 
     for (const li of els.stages.children) {
@@ -146,7 +147,7 @@
       li.className = "";
       const meta = li.querySelector(".meta");
       if (timings[s] != null) meta.textContent = fmtSecs(timings[s]);
-      if (notFound && (s === "download_video" || s === "verification" || s === "frame")) { li.classList.add("skipped"); meta.textContent = "skipped"; continue; }
+      if (notFound && (s === "download_video" || s === "verification" || s === "frame" || s === "face_detection")) { li.classList.add("skipped"); meta.textContent = "skipped"; continue; }
       if (job.status === "done" || (stage === "done" && job.status === "running")) li.classList.add("done");
       else if (i < idx) li.classList.add("done");
       else if (i === idx) li.classList.add(finished ? "failed" : "active");
@@ -161,7 +162,7 @@
       if (p.fraction == null) els.bar.className = "bar indeterminate";
       else { els.bar.className = "bar"; els.bar.style.width = `${Math.round(p.fraction * 100)}%`; }
     }
-    if (job.status === "done") { els.bar.className = "bar done"; els.bar.style.width = "100%"; els.message.textContent = notFound ? "Finished — dialogue not found" : "Finished"; els.pct.textContent = fmtSecs(timings.total); }
+    if (job.status === "done") { els.bar.className = "bar done"; els.bar.style.width = "100%"; els.message.textContent = notFound ? "Finished — dialogue not found" : notOnscreen ? "Finished — not an onscreen dialogue" : "Finished"; els.pct.textContent = fmtSecs(timings.total); }
     if (job.status === "cancelled") { els.bar.className = "bar failed"; els.message.textContent = "Cancelled"; els.pct.textContent = ""; }
     if (job.status === "failed") { els.bar.className = "bar failed"; els.message.textContent = `Failed during ${job.error ? job.error.stage : "?"}`; els.pct.textContent = ""; }
 
@@ -201,7 +202,7 @@
     }
 
     const r = job.result;
-    if (r.status !== "found") {
+    if (r.status === "not_found") {
       showResultSection("notfound");
       badge("not found", "not_found");
       $("nf-dialogue").textContent = r.dialogue;
@@ -213,7 +214,10 @@
     }
 
     showResultSection("found");
-    badge("found", "found");
+    const notOnscreen = r.status === "not_onscreen";
+    const banner = $("r-onscreen");
+    banner.hidden = !notOnscreen;
+    if (notOnscreen) banner.textContent = "Not an onscreen dialogue — the line is heard at this timestamp, but no human face is visible in the frame.";
     const url = `${job.frame_url}?t=${Date.now()}`;
     $("frame-img").src = url; $("frame-link").href = url; $("frame-download").href = url;
     $("frame-caption").textContent = r.frame ? `frame ${r.frame.frame_number} · ${r.frame.timestamp_str} · ${r.frame.width}×${r.frame.height} · ${r.frame.fps.toFixed(3)} fps` : "";
@@ -229,6 +233,12 @@
     $("r-verify").innerHTML = (r.verifications || []).map((v) =>
       `<span class="badge ${esc(v.status)}" title="${esc(v.message || "")}">${esc(v.verifier)} · ${esc(v.status)}${v.score != null ? " " + v.score.toFixed(1) : ""}</span>`).join(" ")
       || `<span class="badge none">disabled</span>`;
+    const fd = r.face_detection;
+    $("r-face").innerHTML = r.face_present === true
+      ? `<span class="badge confirmed">${fd.face_count} face${fd.face_count > 1 ? "s" : ""} · ${(fd.faces[0].confidence * 100).toFixed(0)}%</span>`
+      : r.face_present === false
+        ? `<span class="badge not_onscreen">no face in frame</span>`
+        : `<span class="badge none">not run</span>`;
     $("r-scanned").textContent = r.transcribed_seconds != null ? `${fmtSecs(r.transcribed_seconds)}${r.video && r.video.duration ? ` of ${fmtSecs(r.video.duration)} (${Math.round(100 * r.transcribed_seconds / r.video.duration)}%)` : ""}` : "—";
     $("r-video").textContent = r.video ? `${r.video.title || "—"} · ${r.video.width}×${r.video.height} @ ${(r.video.fps || 0).toFixed(3)} fps` : "—";
     $("r-total").textContent = fmtSecs((r.stage_timings || {}).total);
@@ -241,7 +251,9 @@
     legend.innerHTML = parts.map(({ s, v }) => `<span><i style="background:${TIMING_COLORS[s]}"></i>${esc(s)} ${fmtSecs(v)}</span>`).join("");
 
     $("r-warnings").innerHTML = (r.warnings || []).map((w) => `<li>${esc(w)}</li>`).join("");
-    if ((r.warnings || []).length) badge("found · with warnings", "warn");
+    if (notOnscreen) badge("not an onscreen dialogue", "not_onscreen");
+    else if ((r.warnings || []).length) badge("found · with warnings", "warn");
+    else badge("found", "found");
   }
 
   function errorHint(e) {
@@ -261,8 +273,11 @@
     try { jobs = (await api("/api/jobs")).jobs; } catch (_) { return; }
     if (!jobs.length) { els.jobRows.innerHTML = `<tr><td colspan="6" class="muted">No jobs yet.</td></tr>`; return; }
     els.jobRows.innerHTML = jobs.map((j) => {
-      const res = j.result ? (j.result.status === "found" ? `${j.result.timestamp} · frame ${j.result.frame_number}` : "not found")
-                : (j.error ? `${j.error.stage}: ${j.error.message}` : "");
+      const res = j.result
+        ? (j.result.status === "found" ? `${j.result.timestamp} · frame ${j.result.frame_number}`
+          : j.result.status === "not_onscreen" ? `not onscreen · ${j.result.timestamp}`
+          : "not found")
+        : (j.error ? `${j.error.stage}: ${j.error.message}` : "");
       return `<tr>
         <td><span class="status ${esc(j.status)}">${esc(j.status)}</span></td>
         <td>“${esc(j.dialogue)}”</td>

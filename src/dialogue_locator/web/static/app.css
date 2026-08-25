@@ -70,6 +70,7 @@ textarea { resize: vertical; min-height: 64px; }
 
 .alert { border-radius: 8px; padding: 12px 14px; font-size: 15px; margin-top: 12px; }
 .alert-error { background: var(--err-soft); color: var(--err); }
+.alert-warn { background: var(--warn-soft); color: var(--warn); font-weight: 600; }
 .alert-error strong { display: block; margin-bottom: 2px; }
 .alert-error p { color: var(--text); }
 .alert-error .small { color: var(--text-2); margin-top: 6px; }
@@ -116,7 +117,7 @@ textarea { resize: vertical; min-height: 64px; }
 .badge.found, .badge.confirmed { background: var(--ok-soft); color: var(--ok); }
 .badge.not_found, .badge.rejected, .badge.failed, .badge.cancelled { background: var(--err-soft); color: var(--err); }
 .badge.skipped, .badge.none { background: var(--surface-2); color: var(--muted); }
-.badge.warn { background: var(--warn-soft); color: var(--warn); }
+.badge.warn, .badge.not_onscreen { background: var(--warn-soft); color: var(--warn); }
 
 .frame { margin: 0 0 16px; }
 .frame img { display: block; width: 100%; max-height: 520px; object-fit: contain; background: #000; border-radius: 10px; border: 1px solid var(--line); }
