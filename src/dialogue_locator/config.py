@@ -89,9 +89,10 @@ class WhisperConfig(BaseModel):
 
     fast_model: str = Field(
         "base",
-        description="Model for the streaming pass. 'base' runs ~60x realtime on Apple "
-        "Silicon performance cores (vs ~3x for 'small') with near-identical hit rate; "
-        "the verify model fixes wording/timing.",
+        description="Model for the streaming pass. On Apple Silicon performance cores "
+        "'base' scans at ~11x realtime inside a live server run and ~40-60x isolated on an "
+        "idle machine (vs ~3x for 'small'), with near-identical hit rate; the verify model "
+        "fixes wording/timing.",
     )
     verify_model: str = Field(
         "small",
@@ -230,16 +231,23 @@ class FaceDetectionConfig(BaseModel):
     enabled: bool = Field(
         True,
         description="Run the face check on the matched frame. Disabling it also "
-        "disables the mouth-movement check, which builds on a confirmed face.",
+        "disables the mouth-movement check, which needs this detector's boxes to "
+        "crop to. Note the face check no longer decides the verdict on its own: "
+        "a line can open on a title card and cut to the speaker, so the "
+        "mouth-movement stage scans the whole window and settles it.",
     )
     min_detection_confidence: float = Field(
         0.3,
         ge=0,
         le=1,
         description="Minimum BlazeFace score for a detection to count as a face. "
-        "Calibrated on real frames: faces in cinematic mid/wide shots score as low "
-        "as ~0.34 (close-ups ~0.97) while non-face junk stays at or below ~0.2, so "
-        "0.3 separates them; the model's usual 0.5 default misses distant faces.",
+        "Faces in cinematic mid/wide shots score as low as ~0.30 (close-ups "
+        "~0.97), so the model's usual 0.5 default misses distant faces. This "
+        "threshold cannot separate faces from non-faces on its own: blurred "
+        "rubble in a low-quality source measured 0.45-0.62, above what real "
+        "faces score here. What rejects those is the landmarker's second "
+        "opinion on the crop (mouth_movement.min_face_confidence), so keep this "
+        "loose and let that stage decide.",
     )
     model_path: Path = Field(
         Path("data/models/blaze_face_short_range.tflite"),
@@ -289,8 +297,8 @@ class MouthMovementConfig(BaseModel):
         description="Minimum movement score to count as speaking. Calibrated on "
         "the cached corpus of real matches: faces that are present but silent - "
         "still faces, a voice-over read with the mouth shut, a listener whose "
-        "head turns through a reaction shot - score 0.003-0.021, and faces "
-        "speaking on camera 0.046-0.123. 0.03 sits near the middle of that gap. "
+        "head turns through a reaction shot - score 0.000-0.021, and faces "
+        "speaking on camera 0.046-0.117. 0.03 sits near the middle of that gap. "
         "It moved up with min_face_confidence: a stricter landmarker re-detects "
         "more often and smooths less, so a still face carries more jitter.",
     )
@@ -366,17 +374,19 @@ class MouthMovementConfig(BaseModel):
         "flattens to nothing. Longer gaps still split the run.",
     )
     min_face_confidence: float = Field(
-        0.5,
+        0.4,
         ge=0,
         le=1,
         description="Face detection/presence confidence for the landmarker. "
         "This is the second opinion on whether a crop really holds a face, and "
         "it must be strict: BlazeFace fires on blurred rubble at 0.45-0.62, "
         "higher than it scores some real faces, so it cannot police itself. "
-        "MediaPipe's 0.5 default rejects those crops (18 landmarked frames drop "
-        "to 4) while leaving every verified real face untouched - the crop "
-        "already fixed what lowering this used to be for. 0.7 goes too far and "
-        "reads a listener's landmark noise as speech.",
+        "Raising this rejects those crops (18 landmarked frames drop to 4) - the "
+        "crop already fixed what lowering it used to be for. 0.4 is the measured "
+        "middle: 0.3 lets the rubble through at 0.101, while MediaPipe's 0.5 "
+        "default loses a real speaker in a soft, upscaled TV master (0.053 -> "
+        "0.022, below the movement threshold), and 0.7 reads a listener's "
+        "landmark noise as speech.",
     )
     model_path: Path = Field(
         Path("data/models/face_landmarker.task"),

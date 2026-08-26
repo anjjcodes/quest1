@@ -33,13 +33,13 @@
     "name": "President Kennedy's Speech at Rice University",
     "link": "https://www.youtube.com/watch?v=WZyRbnpGyzQ",
     "dialogue": "We choose to go to the moon in this decade and do the other things",
-    "type": "found (V1 run; visual checks not run)"
+    "type": "onscreen (face present, mouth moving - 0.058, 54/264 frames)"
   },
   {
     "name": "Do Not Skip this video!",
     "link": "https://www.youtube.com/watch?v=T9QoUzPp-VY",
     "dialogue": "It is still our website",
-    "type": "found (V1 run; visual checks not run)"
+    "type": "onscreen (face present, mouth moving - 0.102)"
   },
   {
     "name": "FRIENDS — Monica's Barbados hair",
@@ -51,7 +51,7 @@
     "name": "ok.ru sample video",
     "link": "https://ok.ru/video/1829048486505",
     "dialogue": "Killing all the birds",
-    "type": "found (V1 run; visual checks not run)"
+    "type": "found (V1 run) - ok.ru clip fetch is blocked from some networks; verify locally"
   },
   {
     "name": "SPIDER-MAN: BRAND NEW DAY - Official Trailer (HD)",

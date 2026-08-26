@@ -39,8 +39,8 @@ the current stage and the directories. `_Run._execute` reads as the stage list; 
 |   | *guard* | stages 6–9 run only when the source is a URL or the probed media has a video stream; an audio-only local file instead adds the warning "Source has no video stream; returning the timestamp without a frame." Setting `face_detection.enabled=False` skips **both** visual stages | — |
 | 6 | `download_video` | `downloader.fetch_video_clip(source, match.start, match.end, ...)` — a few seconds of full quality around the *verified* match | `DownloadError` |
 | 7 | `frame` | `frame_extractor.extract(clip, match.start, output_dir/<job>/frame)` | `FrameExtractionError` |
-| 8 | `face_detection` (V2) | `face_detector.detect_file(frame)`; no face → status `NOT_ONSCREEN`; a crashed check fails open with a warning | never fails the job |
-| 9 | `mouth_movement` (V3) | only when V2 confirmed a face: `mouth_analyzer.analyze(clip, match.start, match.end)`; not moving → `NOT_ONSCREEN`; indeterminate/crash fails open with a warning | never fails the job |
+| 8 | `face_detection` (V2) | `face_detector.detect_file(frame)`; describes the reported frame and sets a **provisional** `NOT_ONSCREEN` when it holds no face — V3 can overturn it. A crashed check fails open with a warning **and skips V3** (which needs this detector's boxes to crop to) | never fails the job |
+| 9 | `mouth_movement` (V3) | runs whenever V2 produced an answer, with or without a face in that one frame: `mouth_analyzer.analyze(clip, match.start, match.end)` scans the whole window and **settles the verdict** — moving → `FOUND` and the answer frame moves to that moment; not moving → `NOT_ONSCREEN` (frame moves to the face being judged if the line opened off camera); too few landmarked frames → `NOT_ONSCREEN`. Fails open only when a face was present throughout but never formed a scorable run | never fails the job |
 | 10 | `done` | timings (`total`), final progress event | — |
 
 Folding rule: `CONFIRMED` + `refined` → candidate := refined (logged when the timestamp moves);

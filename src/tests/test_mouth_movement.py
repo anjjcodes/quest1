@@ -493,18 +493,19 @@ def test_result_to_dict():
 def test_landmarker_is_stricter_than_the_detector_feeding_it():
     # V2 runs on whole frames and must accept faint mid/wide-shot faces, so its
     # threshold is lowered. The landmarker sees a tight crop and is the second
-    # opinion on whether that crop is a face at all, so it keeps MediaPipe's
-    # default: BlazeFace fires on blurred rubble at 0.45-0.62, above what it
-    # scores some real faces, and cannot police itself.
+    # opinion on whether that crop is a face at all, so it is stricter:
+    # BlazeFace fires on blurred rubble at 0.45-0.62, above what it scores some
+    # real faces, and cannot police itself. Strict enough to reject rubble,
+    # loose enough to hold a real speaker in a soft, upscaled TV master.
     assert FaceDetectionConfig().min_detection_confidence == 0.3
-    assert MouthMovementConfig().min_face_confidence == 0.5
+    assert MouthMovementConfig().min_face_confidence == 0.4
 
 
 def test_default_threshold_sits_between_the_measured_clusters():
     # Measured over the cached corpus of real matches, with the face crop and
     # box carry in place: faces present but silent (still faces, a listener
     # turning their head, a voice-over read with the mouth shut) score
-    # 0.003-0.021; faces speaking on camera score 0.046-0.123. Moving the
+    # 0.000-0.021; faces speaking on camera score 0.046-0.117. Moving the
     # default outside that gap silently changes every verdict, so it is pinned.
     threshold = MouthMovementConfig().movement_threshold
     assert 0.021 < threshold < 0.046

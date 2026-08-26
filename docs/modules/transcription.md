@@ -84,9 +84,13 @@ decoding → `TranscriptionError("… while decoding")`, after logging how many 
 | model | realtime factor | notes |
 |---|---|---|
 | tiny | ~40× | rough text |
-| base | ~60× | **streaming default** (greedy; ~40× at beam 5) |
-| small | ~3× | **verification default** (`verify_model`); the ±12 s window (≈ 28 s of audio) takes ≈ 10 s |
+| base | ~11× live, ~40-60× isolated | **streaming default** (greedy; ~1.4× slower at beam 5) |
+| small | ~3× | **verification default** (`verify_model`); the ±12 s window (≈ 28 s of audio) took 21.4 s in the reference run |
 | medium | ~0.6× | optional, slower verification |
+
+"Live" is inside a running server (API process, warm-up thread, both models resident);
+"isolated" is a single process on an idle machine. The reference run `df328328a2e7` scanned
+330.3 s of audio in 29.5 s.
 
 These assume `cpu_threads` is sized to the machine's **performance** cores, which is what the
 default of `0` now does. Handing ctranslate2 every core instead costs ~17× on a big.LITTLE CPU

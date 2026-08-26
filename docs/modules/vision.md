@@ -40,8 +40,8 @@ class MouthMovementAnalyzer:
   of `score_window_seconds` (0.5 s), not one number over the whole line. Detrended so a head
   that merely turns during a reaction shot (openness slides to 0.042 raw, 0.016 detrended) is
   not read as speech; sliding so a line that is only on camera for its last second still
-  counts. Measured on the cached corpus: present but silent **0.003–0.021**, speaking on
-  camera **0.046–0.123**; threshold default **0.03** sits in the gap.
+  counts. Measured on the cached corpus: present but silent **0.000–0.021**, speaking on
+  camera **0.046–0.117**; threshold default **0.03** sits in the gap.
 * Frames are **not** landmarked whole. The landmarker's own detector only finds large faces,
   so each frame goes through BlazeFace first and the landmarker sees a padded crop upscaled to
   `min_crop_size`. The last known box is carried forward for `box_carry_seconds` over frames

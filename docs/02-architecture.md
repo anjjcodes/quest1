@@ -164,8 +164,9 @@ matching        0       folded into transcription (scored per word)
 verification    5–60 s  larger model on ±12 s; skipped ≥ 90; refines or warns
 download_video  2–30 s  a few seconds of full-quality clip around the verified match
 frame           0.1 s   OpenCV seek + JPEG write
-face_detection  0.1 s   BlazeFace on the saved frame (V2); gates the verdict, fails open
-mouth_movement  1–5 s   Face Landmarker over the window's frames (V3); gates, fails open
+face_detection  1–3 s   BlazeFace on the saved frame (V2); describes that frame, verdict provisional
+mouth_movement  1–5 s   Face Landmarker over the window's frames (V3); settles the verdict, may
+                        move the answer frame to where the speaker is, fails open
 ```
 
 `LocalizationResult.stage_timings` records each of these plus `total`.

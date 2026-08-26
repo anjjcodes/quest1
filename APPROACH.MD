@@ -109,7 +109,8 @@ array without touching the disk or running FFmpeg again.
 
 ### Step 4. Transcribe and match at the same time
 
-A small Whisper model (`base`, about 60x realtime on my CPU, greedy decoding for speed) streams
+A small Whisper model (`base`, 11x realtime in a live run and up to 60x on an idle machine,
+greedy decoding for speed) streams
 the transcription word by word, with a timestamp on every word. Each word goes straight into a
 sliding window matcher:
 
@@ -201,13 +202,15 @@ version failed on a real clip:
 Windows are only scored inside runs of consecutive same shot frames, and only when a run has
 at least 5 samples. A cut is spotted by losing the face or by the face box jumping, so a step
 between two still faces' resting mouths can never be read as a mouth opening. Measured over
-the cached corpus, faces present but silent score 0.003 to 0.021 and faces speaking on camera
-score 0.046 to 0.123, so the threshold sits at 0.03, in the gap.
+the cached corpus, faces present but silent score 0.000 to 0.021 and faces speaking on camera
+score 0.046 to 0.117, so the threshold sits at 0.03, in the gap.
 
-The landmarker runs at the stock 0.5 confidence, deliberately stricter than the 0.3 that feeds
-it. BlazeFace fires on blurred rubble at 0.45 to 0.62, higher than it scores some real faces,
-so it cannot police itself; a box the landmarker can fit no mesh to is not a face whatever its
-detection score.
+The landmarker runs at 0.4, deliberately stricter than the 0.3 that feeds it. BlazeFace fires
+on blurred rubble at 0.45 to 0.62, higher than it scores some real faces, so it cannot police
+itself; a box the landmarker can fit no mesh to is not a face whatever its detection score.
+0.4 is the measured middle rather than a round number: at 0.3 the rubble gets through and
+scores 0.101, and at MediaPipe's own 0.5 default a real speaker in a soft upscaled TV master
+drops from 0.053 to 0.022 and is called still.
 
 **V3, not V2, settles the verdict**, because it is the only check that sees the whole window
 instead of a single frame:
@@ -267,7 +270,7 @@ tested offline with fakes.
 - **What I chose:** the two model split of Steps 4 and 5 — `base` searches, `small` re reads
   the candidate window, and the 5 point rule decides which one's timestamp survives.
 - **Alternative considered:** one accurate model for everything, which runs at about 3x
-  realtime against `base`'s 60x, or trusting the fast model alone.
+  realtime against `base`'s 11x in the same conditions, or trusting the fast model alone.
 - **Why I chose X over Y:** finding a candidate and confirming it need different levels of
   accuracy. The fast model does mishear words, and on one repeated phrase it was 6.4 seconds
   off until the bigger model fixed it. But I do not blindly trust the big model either,
@@ -375,15 +378,20 @@ rebelled. It's stagnation." and scored 86.7, the verification model retranscribe
 scored 100 on the correct wording and pulled the start back by 0.54 seconds, the frame came
 back with one face at 0.953 confidence, and V3 scored the mouth at 0.074 over 74 frames, all
 of which had a face, then moved the answer frame to the start of the most active window. It
-scanned 5 minutes 30 seconds of audio to get there.
+scanned 5 minutes 30 seconds of audio to get there, and finished in **56.7 seconds** with the
+audio cached: transcription 29.5 s, verification 21.4 s, the two visual checks 4.2 s, and
+everything else 1.5 s.
 
-That run was recorded before the thread fix in decision 7, so its 114 s total is not a number
-I would quote today. Measured on the same cached audio afterwards: the streaming search covers
-those 331 seconds in about 8.5 s and the verification window in about 10 s, with roughly 6 s
-for the clip download, frame extraction and both visual checks. I have not re-run the full
-job end to end since, because ok.ru is not reachable from where I am writing this, so I would
-rather give the measured stage costs than a total I have not seen. The categorised cases below
-come from eleven more dialogue cases across ten other videos, listed in `test_cases.json`.
+The required input turns out to be one of the harder cases in its own right. The line's audio
+starts at 00:05:24.640, but the speaker is not on camera yet; the mouth check finds the
+movement at 00:05:25.312 and moves the answer frame there. So the frame this reports is 0.67
+seconds after the words begin, which is the point of the frame move: the question asks where
+the dialogue *appears*, not where it starts being audible.
+
+That 56.7 s is with the thread fix from decision 7 in place. The same job on the same cached
+audio took 113.7 s before it — transcription alone went from 79.9 s to 29.5 s. The categorised
+cases below come from eleven more dialogue cases across ten other videos, listed in
+`test_cases.json`.
 
 The kinds of cases I actually ran, and what happened:
 
@@ -423,9 +431,27 @@ The kinds of cases I actually ran, and what happened:
 
 Known and not handled, stated plainly rather than left to be discovered:
 
+- Wide shots, and this is the gap I would close first. BlazeFace squashes the whole frame to
+  192x192 before it looks, so a face filling under about 5 percent of the frame width arrives a
+  few pixels across and is not found at all. The case that showed me this is the FRIENDS
+  bookshelf building scene, three people spread across a wide living room shot, on the line
+  "I'm supposed to attach a brackety thing to the side things". The man saying it is clearly on
+  camera and clearly mid sentence, but his face is 48 px in a 1920x1080 frame and the detector
+  found nothing in all 96 frames of the line, so the mouth check had nothing to judge and a
+  real onscreen line came back off screen. The cause is size, not angle: it is not a
+  resolution limit either. Crop a 350x260 region around that same face, same angle, same
+  frame, and the same detector finds it at 0.97; and a confirmed speaker shrunk to a 48 px face
+  still scores 0.045 when it fills enough of the frame. The fix is tiled
+  detection, searching sub regions when the full frame pass finds nothing. I measured it on
+  that frame: a 4x4 grid reaches the speaker at 0.33 and a 6x6 grid at 0.68, costing 40 to
+  90 ms on only the frames that need it. I left it out because of the next point, which makes
+  it a bigger job than it looks.
 - Multiple faces in frame. The landmarker judges the highest scoring box, so the tracked face
   can change identity mid window. Short scoring windows contain the damage, half a second of
-  one shot, but do not remove it. The FRIENDS case above is a two face frame.
+  one shot, but do not remove it. The FRIENDS case above is a two face frame, and the wide shot
+  above has three people with one speaking, where 2x2 tiling locked onto the wrong one. Doing
+  wide shots properly therefore means tracking each face separately and calling the line
+  onscreen if any of them is speaking, not just finding more boxes.
 - An occluded or turned away mouth. A speaker with a hand over their mouth or in profile
   contributes low or no openness, and the result reads as a still mouth.
 - Minimum duration. A single frame flash of a speaking face can win a window if it lands in a

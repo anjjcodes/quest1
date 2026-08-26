@@ -4,7 +4,7 @@
 
 V2 (face presence, `vision/face_detector.py`) and V3 (mouth movement,
 `vision/mouth_movement.py`) are the worked examples: each is a small analyser class with its own
-config block, called from a `_stage_*` method in `pipeline/pipeline.py` that gates the verdict
+config block, called from a `_stage_*` method in `pipeline/pipeline.py` that sets the verdict
 and **fails open** (a crashed check adds a warning, it never loses the localisation). To add,
 say, a "subtitle text on screen" check (V4):
 

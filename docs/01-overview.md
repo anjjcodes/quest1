@@ -59,8 +59,10 @@ All three are implemented; further visual stages plug in the same way (see
   default (the rest are opt-in behind a `network` marker or `DL_RUN_MODEL_TESTS=1`).
 * Interfaces: CLI (`dialogue-locator`), HTTP API (`dialogue-locator-server`, FastAPI, OpenAPI at
   `/docs`), single-page web UI at `/`.
-* Measured on an Apple M2 (CPU, int8, 4 performance cores): streaming pass `base` ≈ 60×
-  realtime, `small` ≈ 3×; verification with the default `small` over the ±12 s window
-  (≈ 28 s of audio) takes ≈ 10 s. Thread count dominates these numbers — see
+* Measured on an Apple M2 (CPU, int8, 4 performance cores), reference ok.ru run
+  `df328328a2e7`: **56.7 s end to end** with the audio cached — transcription 29.5 s for
+  5 m 30 s of audio (≈ 11× realtime), verification 21.4 s, both visual checks 4.2 s. Isolated
+  on an idle machine the streaming pass reaches ≈ 40-60× realtime, so a live run is bounded by
+  machine load more than by the model. Thread count dominates all of it — see
   `whisper.cpu_threads` in [configuration](04-configuration.md) and decision 7 in
   `APPROACH.MD`.

@@ -17,19 +17,29 @@ run) or set `DL_STORAGE__KEEP_INTERMEDIATE=false`.
 
 | Item | Measured |
 |---|---|
-| streaming pass, `base` | ≈ 60× realtime → 55-min video worst case ≈ 1 min |
+| streaming pass, `base` | ≈ 11× realtime in a live server run; ≈ 40-60× isolated on an idle machine |
 | streaming pass, `small` | ≈ 3× realtime → worst case ≈ 18 min |
-| verification, `small`, ±12 s window | ≈ 10 s (skipped entirely when the first pass scores ≥ 90) |
+| verification, `small`, ±12 s window | 21.4 s in the reference run (skipped entirely when the first pass scores ≥ 90) |
 | thread count (`whisper.cpu_threads`) | 4 P-cores 5.4 s vs 8 cores 90.9 s for the same 331 s scan — see below |
 | model load (cached weights) | `base` 1 s, `medium` 3–25 s (first load converts to int8) |
 | first-time weight download | `base` 140 MB, `small` 460 MB, `medium` 1.5 GB |
-| 55-min ok.ru reference video, line at 5:25, audio cached | search 331 s of audio ≈ 8.5 s + verification ≈ 10 s + download/frame/vision ≈ 6 s |
+| 55-min ok.ru reference video, line at 5:25, audio cached | **56.7 s** end to end (run `df328328a2e7`) |
 | 18-min JFK speech, line at 9:13 | scan stops at 51 % of the audio; same per-stage rates as above |
 
-The two end-to-end rows are per-stage measurements on the cached reference audio, taken after
-the `cpu_threads` fix. Earlier revisions of this table quoted 59 s and 91 s totals measured
-before that fix, when the streaming pass ran at ~3.6× realtime instead of ~60×; they are not
-comparable and have been removed rather than rescaled.
+Reference run `df328328a2e7`, the fastest recorded, with the audio already cached:
+
+| stage | before the `cpu_threads` fix | after |
+|---|---|---|
+| transcription (330.3 s of audio scanned) | 79.9 s | **29.5 s** |
+| verification (±12 s window) | 27.7 s | **21.4 s** |
+| face + mouth checks | 2.4 s | 4.2 s |
+| download, audio, clip, frame | 3.7 s | 1.5 s |
+| **total** | **113.7 s** | **56.7 s** |
+
+So the fix is worth ~2× end to end and ~2.7× on the stage it targets. The remaining gap
+between 29.5 s here and the ~8 s the same scan takes isolated is machine load, not the
+pipeline: a live run shares the CPU with the API server, the background model warm-up and
+both resident models.
 
 > **If transcription looks 10-20x slower than the table above**, check `whisper.cpu_threads`.
 > The default of `0` sizes the pool to the machine's *performance* cores. Forcing it to the

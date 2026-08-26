@@ -19,7 +19,7 @@ questions.
 | 12 | **OpenCV seek with landing check + ffmpeg fallback**, proven equal pixel-wise | OpenCV only / ffmpeg only | OpenCV is fast but backend-dependent; ffmpeg is frame-accurate but slower. Test shows mean-abs diff 0.5 for the same frame vs ~5 for a neighbour. |
 | 13 | Media facts from **ffprobe**, not the site | yt-dlp metadata | Site fps/duration are often rounded or absent (ok.ru). Frame number = t × fps must use the real file's fps. |
 | 14 | **Cache media per source URL** (`sha1`), `keep_intermediate=True` | delete after each job | Re-running a second dialogue on the same 55-min video must not re-download 1.5 GB. |
-| 15 | `fast_model` default **`base`** (was `small`) | `small` | Measured 60× vs 3× realtime with near-identical hit rate; the verifier fixes wording/timing. Worst case on the PS video 5 min vs 18 min. |
+| 15 | `fast_model` default **`base`** (was `small`) | `small` | Measured 11× vs 3× realtime in a live run with near-identical hit rate; the verifier fixes wording/timing. Worst case on the PS video 5 min vs 18 min. |
 | 16 | Input validated **before any I/O**, and again synchronously in the API (422) | let the job fail | A one-word dialogue or bad URL fails in milliseconds, not after a download. The API reuses the same validators the pipeline uses. |
 | 17 | **Errors carry a `stage`**; boundaries log before raising (WARNING for input, ERROR for tools) | plain exceptions | One `except DialogueLocatorError` in each interface; UI shows "Failed during download"; logs always show the cause even when the caller swallows it. |
 | 18 | **Pipeline is framework-free**; progress via callback; every stage injectable | pipeline inside FastAPI handlers | Same code runs from CLI, API and tests with fakes; V2 stages plug in without touching HTTP code. |
@@ -32,7 +32,13 @@ questions.
 
 | 25 | **`cpu_threads=0` sizes the pool to the machine's performance cores**, read from `hw.perflevel0.logicalcpu` on macOS, falling back to `os.cpu_count()` elsewhere | `os.cpu_count()`, i.e. every core — which is what shipped until this was measured | The old reasoning ("ctranslate2's default of 4 leaves a modern CPU idle") is wrong on big.LITTLE silicon. An M2 has 4 performance and 4 efficiency cores, and ctranslate2 runs each parallel region across whatever it is handed, so the fast cores finish and wait at the barrier for the slow ones. Same 331 s scan, `base`/int8, byte-identical output: **5.4 s at 4 threads, 90.7 s at 6, 90.9 s at 8** — a 17× cliff the moment work touches an efficiency core. Verification behaves the same (9.7 s vs 17.3 s). Found only because a run that should have taken 25 s took 2.5 minutes and the raw library beat our own wrapper by 5×. Every test still passed throughout: they assert on output, and the output never changed. |
 
-## Known limitations (V1)
+| 26 | **Crop to the face before landmarking**, instead of handing the landmarker whole frames | landmark the full frame (what shipped); upscale the whole frame | The Face Landmarker runs its own detector on whatever it is given, and that detector only finds faces filling a decent part of the image. On a 1920×1080 wide shot it found *nothing* where a 290 px face was plainly on camera — the speaker contributed zero frames, so a real onscreen line read as "mouth not moving". BlazeFace does find those faces, so each frame now goes through it first and the landmarker sees a padded, upscaled crop. Measured on the Spider-Man trailer: **35/61 → 54/61** frames landmarked, score **0.017 → 0.047**, verdict flipped to onscreen. Upscaling the whole frame cannot work: the detector letterboxes its input to 192×192 regardless. |
+| 27 | **Detrended standard deviation over a sliding window**, not one standard deviation over the whole line | one score per line (what shipped); mean absolute frame-to-frame change | Two separate failures. *Sliding*, because a line that is off camera for most of its length and on camera for the last second averages the speech away — the brief still calls that onscreen. *Detrended*, because cropping raised the signal's resolution and a listener merely **turning their head** then scored 0.042, twice what a still mouth was calibrated at; the same window's residual after subtracting a straight line is 0.016, while a speaking mouth keeps almost all its spread (0.052 raw → 0.047 detrended). A line fits a smooth slide and not an oscillation, so the residual separates a moving *mouth* from a moving *head*. Mean absolute change separated them too but only 3.1× against detrending's 3.0× at the cost of an fps-dependent threshold. |
+| 28 | **Carry the last face box forward, and bridge one- or two-frame gaps** | re-detect every frame and split runs on every miss (what shipped) | BlazeFace flickers on faces that are small in the frame: a 290–416 px face measured **0.30–0.39** against a 0.30 threshold and was found in only **4 of 26 frames** — a scattered dust of samples, no run long enough to score. The landmarker is reliable on a crop even when the detector is not, so the last box is reused on frames detection misses and the landmarker confirms or rejects it: **4 → 22 frames**. Separately, single-frame landmarker dropouts were shattering one open-close arch into a rising ramp and a falling ramp — which decision 27 then flattens to nothing by design. Bridging gaps up to `max_gap_seconds` fixed that: score **0.021 → 0.090** on the same clip. Both are bounded so a cut cannot attribute a new shot's face to the previous run. |
+| 29 | **The mouth-movement stage owns the onscreen verdict**; the face check on the answer frame is provisional, and the answer frame moves to where the speaker actually is | face check gates the verdict and V3 only refines it (what shipped) | The face check sees **one frame** — the first of the line — and a line can open on a title card or a cutaway. "hi my name is peter parker" matched 0.86 s earlier than "my name is peter parker", landing on a Marvel Studios card; the old cascade reported "no face detected" and never ran the mouth check at all, so the same sentence gave two different reasons depending on whether its first word was included. Only a scan of the whole window can tell a title card apart from a line nobody is on camera for. The answer frame follows: on a positive verdict it moves to where the mouth was found moving, on a negative one to the face being called silent — showing a logo next to "mouth not moving" explains nothing. `match.start` is untouched, so the two are always comparable. |
+| 30 | **Two models must agree that a crop is a face** — BlazeFace stays loose (0.3), the landmarker is strict (0.4) — and a face nothing can landmark is not a face | one confidence threshold; raise BlazeFace's | BlazeFace fired on **blurred rubble at 0.45–0.62**, *higher* than it scores some real faces (0.30), so its own score cannot separate faces from non-faces and raising it would lose real faces first. The landmarker's presence confidence on the crop is an independent second opinion: at 0.4 the rubble drops from 18 landmarked frames to 4 while every verified real face is untouched. 0.3 lets the rubble through at 0.101; 0.5 loses a real speaker in a soft, upscaled TV master (0.053 → 0.022); 0.7 reads a listener's landmark noise as speech. The pipeline follows the same logic: a handful of landmarked frames across a whole line is evidence *against* a face, not a missing measurement, so it no longer fails open into "found". |
+
+## Known limitations
 
 * Downloads use a single connection; hosts that throttle per connection (e.g. ok.ru at
   ~200 KB/s) are slow. Parallel fragments / an external downloader (aria2c) are the planned
@@ -40,8 +46,27 @@ questions.
 * No test asserts on *speed*, so a performance regression like decision 25 is invisible to the
   suite. A throughput check over a fixed clip would close that.
 * English-only normalisation (non-ASCII letters dropped) — one regex to widen.
-* The visual checks judge one face per frame (the most prominent); a crowd scene where a
-  background speaker mouths the line could still be judged on the foreground face.
+* **Wide shots defeat the face detector — the main open gap, and the one worth fixing next.**
+  BlazeFace letterboxes the whole frame to 192×192, so a face filling under ~5 % of the frame
+  width arrives a handful of pixels across and is not found at all. Measured on the FRIENDS
+  bookshelf-building scene — three people across a wide living-room shot, line *"I'm supposed
+  to attach a brackety thing to the side things"* — the speaker is clearly on camera and
+  clearly mid-sentence, but his face is **48 px in a 1920×1080 frame (2.5 % of the width)** and
+  the detector found **0 faces in all 96 frames** of the line, so the mouth check had nothing
+  to judge and a genuine onscreen line was reported as off-screen. **The cause is size, not
+  angle or resolution** — cropping a 350×260 region around that same face, same angle, same
+  frame, detects it at **0.97**, and a confirmed speaker shrunk to a 48 px face still scores
+  0.045 (moving) when it fills enough of the frame. The fix
+  is tiled detection: search sub-regions when the full-frame pass finds nothing. Measured on
+  that frame, a 4×4 grid reaches the speaker (0.33) and 6×6 is solid (0.68), at 40–90 ms on
+  only the frames that need it. Left undone deliberately — see the next bullet for why it is
+  bigger than it looks.
+* The visual checks judge **one face per frame** (the highest-scoring box), so a crowd scene
+  where a background speaker mouths the line is judged on the foreground face. This compounds
+  with the bullet above: on that FRIENDS frame there are three people and only one is speaking,
+  and 2×2 tiling locked onto the wrong one. Doing wide shots properly therefore means tracking
+  each face separately and calling the line onscreen if *any* of them is speaking, not just
+  finding more boxes.
 * Jobs are forgotten on server restart; result files persist.
 * YouTube access depends on yt-dlp keeping up with YouTube; ok.ru reachability depends on the
   network (ISP-level blocks were observed).

@@ -52,8 +52,8 @@ detrended). Fitting a line per window and measuring what is left over separates
 a mouth that is *moving* from a head that is moving; plain spread does not.
 
 Measured over the cached corpus: faces present but silent - still faces, the
-listener above, a voice-over read with the mouth shut - score 0.003-0.021, while
-faces speaking on camera score 0.046-0.123. The default threshold sits in the
+listener above, a voice-over read with the mouth shut - score 0.000-0.021, while
+faces speaking on camera score 0.046-0.117. The default threshold sits in the
 gap.
 
 Sliding, because speech produces rapid open/close cycles that a single window
