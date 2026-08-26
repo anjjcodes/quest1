@@ -55,7 +55,10 @@ through while the important fields are typed for OpenAPI), `ErrorSchema`, `JobRe
 `JobListResponse`, `HealthResponse`.
 
 `SettingsView` carries the per-job overrides: the `StageToggles` cascade (verification → face
-detection → mouth movement) plus the numeric knobs the UI exposes.
+detection → mouth movement) plus the numeric knobs the UI exposes, including
+`max_occurrences` (≥ 1, or `-1` for every occurrence). It is validated on the schema as
+well as on `MatchingConfig`, because `apply_setting_overrides` reaches the config through
+`model_copy`, which does **not** re-validate — without it a `0` would reach the pipeline.
 
 ## App factory (`app.py`)
 
@@ -74,6 +77,8 @@ def main() -> None            # `dialogue-locator-server` entry point → uvicor
 
 `src/tests/test_api.py` uses `fastapi.testclient.TestClient` with a `FakePipeline` (modes:
 found / not_found / error / slow / crash) — no models, no network. Covered: full found flow incl.
-frame download and on-disk result, not-found, failed, crash, five 422 cases, 404s, cancel of a
-running job, queued job waiting for a slot and cancelling instantly, delete finished, retention
-expiry, OpenAPI route list, UI served.
+frame download and on-disk result, not-found, failed, crash, eight 422 cases (five bad-input
+bodies, missing fields, and `max_occurrences` of `0` / `-2`), 404s, cancel of a running job,
+queued job waiting for a slot and cancelling instantly, delete finished, retention expiry,
+OpenAPI route list, UI served, and the per-job settings round trip: defaults expose
+`max_occurrences`, an override reaches the job without mutating the server defaults.

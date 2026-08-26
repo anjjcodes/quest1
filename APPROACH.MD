@@ -80,6 +80,9 @@ Video URL
              ▼
      mouth movement check (V3) ──► frame moves to where
              │                      the speaker is on camera
+             │
+             ├──► not onscreen, and more occurrences allowed?
+             │      resume the search past this one (step 10)
              ▼
       result JSON + frame image
 ```
@@ -171,10 +174,12 @@ corpus rather than on guessed defaults.
 
 **Face check (V2)** — MediaPipe BlazeFace looks for a face in the extracted frame. I lowered
 the confidence threshold to 0.3 because faces in cinematic mid and wide shots score as low as
-0.34 while non face junk stays at or below 0.2, and the model's usual 0.5 default misses
-distant faces. I set it by manually scoring detections on frames spanning closeups, medium
-shots and wide cinematic shots. No face here is a provisional `not_onscreen`, which V3 can
-still overturn.
+0.30, against closeups at about 0.97, and the model's usual 0.5 default misses distant faces.
+I set it by manually scoring detections on frames spanning closeups, medium shots and wide
+cinematic shots. What that threshold cannot do is separate faces from non faces, because
+BlazeFace scores blurred rubble higher than it scores some real faces — the next paragraph is
+about the second opinion that does. So this check stays deliberately loose: no face here is a
+provisional `not_onscreen`, which V3 can still overturn.
 
 **Mouth check (V3)** — MediaPipe's Face Landmarker tracks the lips across every frame of the
 matched window. Per frame the signal is mouth openness, the inner lip gap divided by the
@@ -231,15 +236,64 @@ instead of a single frame:
 The result is one JSON record plus the frame image: status (`found`, `not_found` or
 `not_onscreen`), the timestamp as HH:MM:SS.mmm, the frame number, the matched text as heard,
 the match score, what the first pass found versus what the verifier decided, the face result
-(count, per face boxes and scores), the mouth result (score against threshold, frames analysed
-versus frames with a face, the window measured, and `movement_start`, the moment the speaker
-comes on camera), any warnings, near misses when nothing matched, and how long each stage
-took. When V3 moved the answer frame, the frame and timestamp in the record are the moved
-ones, and the face check has been re run on that frame so the two never disagree.
+(every box and its score, though what gets *reported* is presence rather than a count: the
+detector is loose enough to fire on non faces and only the best box is ever judged, so a count
+describes something the verdict never used), the mouth result (score against threshold,
+frames analysed versus frames with a face, the window measured, `movement_start`, the moment
+the speaker comes on camera, and `face_start`, the face a negative verdict is about), any
+warnings, near misses when nothing matched, and how long each stage took. When V3 moved the
+answer frame, the frame and timestamp in the record are the moved ones, and the face check
+has been re run on that frame so the two never disagree.
 The command line prints the short form, the API returns the full record, and the web UI shows
 it with live progress. All three interfaces run the exact same pipeline, and every stage of
 that pipeline can be swapped out in the constructor, which is also how the whole thing is
 tested offline with fakes.
+
+### Step 10. When the line is said more than once
+
+Steps 2 to 9 judge one occurrence: the first one the search hears. That is the right answer
+when the line is said once, and the wrong one when it is said several times and only a later
+one is delivered on camera. The question asks where the dialogue *appears*, so a first
+occurrence read over a title card should not settle it.
+
+`matching.max_occurrences` controls how far the pipeline is willing to look, and all three
+interfaces expose it (`--max-occurrences` on the CLI, the settings panel in the UI, the job
+body over HTTP). At the default of 1 nothing changes. Above 1, an occurrence that comes back
+`not_onscreen` no longer ends the job: the search resumes from that occurrence's last word
+and the next one is put through
+the same verification, clip, frame and visual checks. The first occurrence that comes back
+onscreen wins. `-1` means no limit, for a video whose repeat count is not known up front.
+
+Three details make it safe rather than merely possible:
+
+- **The resume is a slice, not a rescan.** The tail of the in memory audio is handed to the
+  transcriber with an offset, so timestamps stay absolute and the audio before the rejected
+  occurrence is never decoded twice. The slice is taken once, before both scans, so the VAD
+  off retry searches exactly the same tail; a retry that started from zero would rediscover
+  the occurrence just rejected and the loop would never move.
+- **The fallback is always the first occurrence.** If nothing is onscreen anywhere, the record
+  reported is the first one, with its own verdict and warnings, which is exactly what a single
+  occurrence run would have said. Because later attempts overwrite the frame image, that
+  frame is re extracted before returning, at the reported frame's own timestamp rather than
+  the match start, since V3 may have moved it.
+- **It terminates on its own.** The resume point strictly advances every round, so an
+  unlimited run ends either when the scan finds no further occurrence or when less than
+  `matching.min_tail_seconds` of audio is left.
+
+Only a definite negative reopens the search. An indeterminate mouth check, a crashed face
+check and a disabled visual stage all still return where they always did, because "cannot
+tell" is not evidence of a better occurrence later.
+
+What it costs is the early stop. A line that is never onscreen now transcribes the whole
+track and pays a clip download plus a visual pass per occurrence, so 1 stays the default and
+the higher settings are opt in per job.
+
+The case that made this concrete is a WIRED interview, `"support Liverpool?"`, said twice: at
+00:01:26.563 while the camera is on the question card, where no frame of the line holds a face
+at all, and again at 00:01:40.723 as the answer to camera, mouth moving at 0.052 over 14 of 14
+frames. At the default the tool reports `not_onscreen` at 1:26 and is right about that
+occurrence; with `max_occurrences` raised it reports 1:40.7 and answers the question that was
+actually asked. It is case 13 in `test_cases.json`.
 
 ## Key Decisions
 
@@ -345,19 +399,44 @@ tested offline with fakes.
   between those two numbers was the whole bug. The general lesson I took: "use all the cores"
   stopped being sound advice when CPUs stopped having one kind of core.
 
+### 8. Let a rejected occurrence reopen the search instead of ending the job
+
+- **What I chose:** `matching.max_occurrences` (step 10). At 1, the first audible occurrence
+  is judged and reported whatever the verdict, which is what the tool always did. Above 1, a
+  `not_onscreen` verdict resumes the search past that occurrence; `-1` evaluates every one.
+  The fallback is always the first occurrence, so the answer can only get better, never worse.
+- **Alternative considered:** collecting every occurrence up front and judging them together,
+  or leaving it at one and documenting the limitation.
+- **Why I chose X over Y:** collecting first throws away the early stop unconditionally, and
+  the early stop is the reason a 55 minute video costs 5 minutes. Resuming pays that cost only
+  when the first occurrence actually fails the visual check, which is the only case where the
+  extra work can change the answer. Leaving it at one was tempting because the limitation was
+  already written down, but the WIRED case in step 10 showed it is not a rare shape: an
+  interview format where the question is read over a card and answered to camera produces it
+  every time, and the tool confidently returned the wrong frame. What the resume costs is
+  honest and bounded: one clip download and one visual pass per rejected occurrence, and the
+  worst case is a full transcription. That is why the default stays at 1.
+- **What it taught me:** the guard that mattered was not the loop but the bookkeeping around
+  it. Warnings and the frame image are per occurrence and had to be snapshotted, stage timings
+  had to start accumulating rather than overwriting, and the resume point has to advance
+  strictly or an unlimited run would re judge the same window forever. Writing the tests found
+  the first two; the third I only saw when I asked what `-1` does to a degenerate word.
+
 ## Assumptions
 
 - "Dialogue" means spoken audio, not subtitle text, for the reasons in decision 1. If
   subtitles were the target, I would swap the speech recognition stage for OCR on the frames
   and keep the rest of the pipeline.
-- The first occurrence of the line is the one that is wanted.
+- By default the first occurrence of the line is the one that is wanted. That is only a
+  default now: `matching.max_occurrences` lets the search carry on past an occurrence that
+  turns out not to be onscreen, and `-1` evaluates every occurrence in the video. See step 10.
 - The audio is English. The text normaliser only handles ASCII for now.
 - The URL is something `yt-dlp` can fetch, and ffmpeg is installed. Everything runs on CPU,
   no GPU is assumed.
 - The dialogue has at least two words, because single words match far too easily to give a
   meaningful timestamp.
 
-## Extensibility (not implemented, just noted)
+## Extensibility (not implemented)
 
 - If another visual check came up, say checking whether the detected face is turned towards
   the camera, this design supports it via the same pattern V2 and V3 used (an analyser class
@@ -390,7 +469,7 @@ the dialogue *appears*, not where it starts being audible.
 
 That 56.7 s is with the thread fix from decision 7 in place. The same job on the same cached
 audio took 113.7 s before it — transcription alone went from 79.9 s to 29.5 s. The categorised
-cases below come from eleven more dialogue cases across ten other videos, listed in
+cases below come from twelve more dialogue cases across eleven other videos, listed in
 `test_cases.json`.
 
 The kinds of cases I actually ran, and what happened:
@@ -407,7 +486,7 @@ The kinds of cases I actually ran, and what happened:
 - Repeated phrase: the fast model locked onto the wrong occurrence and the verification model
   corrected it, as described in decision 3.
 - Face present and speaking: the normal `found` case, covering both Sherlock clips and the
-  zoo video. These are the upper cluster in Step 8's calibration, 0.046 to 0.123.
+  zoo video. These are the upper cluster in Step 8's calibration, 0.046 to 0.117.
 - Dialogue present but no face in the frame: a title card and an off camera line both came
   back `not_onscreen`, with the full match details still reported.
 - Face present but mouth not moving: the face scored 0.343, which is exactly the wide shot
@@ -428,6 +507,13 @@ The kinds of cases I actually ran, and what happened:
   18 frames. It currently reports onscreen. I keep it as a tripwire for threshold changes, not
   as ground truth, and it is the case that makes me want a sync check rather than a bare
   movement number.
+
+- The line is said more than once, and only a later one is onscreen. A WIRED interview reads
+  the question over a card and answers it to camera, so `"support Liverpool?"` is heard at
+  00:01:26.563 with no face in any of the 21 frames of that window, and again at 00:01:40.723
+  with the mouth moving at 0.052 over 14 of 14 frames. At the default the tool answers about
+  the first occurrence and is right about it; with `matching.max_occurrences` raised it
+  resumes past that one and reports 1:40.7. This is the case step 10 exists for.
 
 Known and not handled, stated plainly rather than left to be discovered:
 
@@ -459,10 +545,11 @@ Known and not handled, stated plainly rather than left to be discovered:
 
 ### Test coverage
 
-309 automated tests across 14 files. 302 of them run offline against fakes and small
-generated fixtures in about 15 seconds, needing no network and no downloads. The seven that
-touch real model weights or hosts are opt in: five behind a `network` marker, two behind a
-`DL_RUN_MODEL_TESTS=1` env var.
+336 automated tests across 14 files. 329 of them run offline against fakes and small
+generated fixtures in about 20 seconds, needing no network and no downloads. The other seven
+touch real model weights or hosts and are opt in: five behind a `network` marker, two behind a
+`DL_RUN_MODEL_TESTS=1` env var. The per module table below counts all 336, so it adds up to
+336 and not 329.
 
 | Module | Covered | Not covered |
 | --- | --- | --- |
@@ -471,11 +558,11 @@ touch real model weights or hosts are opt in: five behind a `network` marker, tw
 | `transcription` (23) | streaming word emission, early close, VAD retry, thread sizing and its fallbacks | real Whisper accuracy |
 | `media` — audio, downloader, frames, probe (78) | PCM conversion, yt-dlp fallback and caching, clip offset arithmetic, frame index from fps, OpenCV seek failure → FFmpeg | live hosts |
 | `vision/face_detector` (19) | threshold behaviour, box sorting, model download failure, fail open | detector accuracy on new footage |
-| `vision/mouth_movement` (35) | detrending vs a drifting mouth, best window vs whole window, speech at the end of a line, cuts between still faces, gap bridging, crop upscaling, box carry expiry and cut on resume, threshold sits between the measured clusters | the corpus itself is 12 cases |
-| `pipeline` (43) | every verdict path, frame moves and the re run face check, indeterminate fails open, stages disabled | end to end timing |
-| `api`, `cli`, `config`, `models` (52) | job lifecycle, progress events, exit codes, serialisation | concurrency under load |
+| `vision/mouth_movement` (35) | detrending vs a drifting mouth, best window vs whole window, speech at the end of a line, cuts between still faces, gap bridging, crop upscaling, box carry expiry and cut on resume, threshold sits between the measured clusters | the corpus itself is 13 cases |
+| `pipeline` (56) | every verdict path, frame moves and the re run face check, indeterminate fails open, stages disabled, and the occurrence loop: resume offsets, the VAD off retry sharing that offset, fallback to the first occurrence and its frame, warnings kept per occurrence, timings accumulating, unlimited runs terminating | end to end timing |
+| `api`, `cli`, `config`, `models` (66) | job lifecycle, progress events, exit codes, serialisation | concurrency under load |
 
-The gap I would close first is the corpus size. Every threshold in Step 8 is calibrated on 12
+The gap I would close first is the corpus size. Every threshold in Step 8 is calibrated on 13
 cases, and `test_default_threshold_sits_between_the_measured_clusters` pins the numbers those
 clips produced, so the tests protect the calibration from drifting but cannot tell me it
 generalises.
@@ -486,9 +573,10 @@ generalises.
   single connection and that dominates the total runtime there. An external downloader like
   aria2c would parallelise it. With the thread fix in decision 7 this is now comfortably the
   slowest thing left.
-- A throughput check in the test suite. Decision 7's bug was invisible to 300 passing tests
-  because every one of them asserts on output, not on time. A test that scans a fixed clip and
-  fails if it drops below some realtime factor would have caught it the day it appeared.
+- A throughput check in the test suite. Decision 7's bug was invisible to the entire passing
+  suite because every test in it asserts on output, not on time. A test that scans a fixed
+  clip and fails if it drops below some realtime factor would have caught it the day it
+  appeared.
 - Support for languages other than English. The blocker is one regex in the normaliser, plus
   testing with scripts other than Latin.
 - Crowd scenes. Landmarking every detected face instead of only the highest scoring box, and

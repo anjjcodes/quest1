@@ -21,7 +21,7 @@ import json
 import sys
 from pathlib import Path
 
-from dialogue_locator.config import Settings, get_settings
+from dialogue_locator.config import UNLIMITED_OCCURRENCES, Settings, get_settings
 from dialogue_locator.exceptions import DialogueLocatorError
 from dialogue_locator.logging_config import configure_logging
 from dialogue_locator.models import LocalizationResult, ProgressEvent, ResultStatus
@@ -39,6 +39,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--verify-model", help="Whisper model for verification (default from config)")
     p.add_argument("--no-verify", action="store_true", help="skip the large-model verification pass")
     p.add_argument("--threshold", type=float, help="fuzzy match threshold 0-100")
+    p.add_argument("--max-occurrences", type=int, help="how many occurrences of the dialogue to evaluate before settling (1 = first audible one, -1 = all)")
     p.add_argument("--max-height", type=int, help="max height for the final clip download (the search uses audio only)")
     p.add_argument("--output-dir", type=Path, help="where to write frame + result.json")
     p.add_argument("--work-dir", type=Path, help="where to cache downloads/audio")
@@ -61,8 +62,21 @@ def apply_overrides(settings: Settings, args: argparse.Namespace) -> Settings:
         update["whisper"] = settings.whisper.model_copy(update=whisper)
     if args.no_verify:
         update["verification"] = settings.verification.model_copy(update={"enabled": False})
+    matching: dict = {}
     if args.threshold is not None:
-        update["matching"] = settings.matching.model_copy(update={"match_threshold": args.threshold})
+        matching["match_threshold"] = args.threshold
+    if args.max_occurrences is not None:
+        # model_copy does not re-validate, so the bound is checked here the same
+        # way the API schema checks it - otherwise a 0 would reach the pipeline
+        # and loop zero times.
+        if args.max_occurrences != UNLIMITED_OCCURRENCES and args.max_occurrences < 1:
+            raise SystemExit(
+                f"--max-occurrences must be >= 1, or {UNLIMITED_OCCURRENCES} for every "
+                f"occurrence (got {args.max_occurrences})"
+            )
+        matching["max_occurrences"] = args.max_occurrences
+    if matching:
+        update["matching"] = settings.matching.model_copy(update=matching)
     if args.max_height:
         update["download"] = settings.download.model_copy(update={"max_height": args.max_height})
     storage: dict = {}

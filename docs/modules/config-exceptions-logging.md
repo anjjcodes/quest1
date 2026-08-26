@@ -14,7 +14,8 @@ class Settings(BaseSettings):            # pydantic-settings, env prefix DL_, ne
     download: DownloadConfig             # yt-dlp: max_height, search_max_height, clip_padding, retries, timeout
     audio: AudioConfig                   # ffmpeg: sample_rate, channels, binaries, timeout
     whisper: WhisperConfig               # fast_model, verify_model, device, compute_type, language, VAD…
-    matching: MatchingConfig             # match_threshold, window_tolerance, min_dialogue_words, top_k
+    matching: MatchingConfig             # match_threshold, window_tolerance, min_dialogue_words,
+                                         #   top_k, max_occurrences, min_tail_seconds
     verification: VerificationConfig     # enabled, search_window_seconds, skip_above_score, max_score_drop
     frame: FrameConfig                   # image_format, jpeg_quality
     face_detection: FaceDetectionConfig  # V2: enabled, min_detection_confidence, model path/url

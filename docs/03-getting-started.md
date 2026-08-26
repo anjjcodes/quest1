@@ -40,6 +40,7 @@ uv pip install -e ".[dev]"       # or: pip install -e ".[dev]"
 dialogue-locator "https://ok.ru/video/248244667877" "My mind rebels at stagnation"
 dialogue-locator path/to/video.mp4 "some spoken line" --json      # local file, JSON output
 dialogue-locator <url> "<line>" --fast-model small --no-verify -v # overrides, debug logs
+dialogue-locator <url> "<line>" --max-occurrences -1              # judge every occurrence, not just the first
 ```
 
 Output (exit code 0 found / 2 not found / 3 heard but not onscreen / 1 error):
@@ -50,7 +51,7 @@ Frame     : 7799
 Text      : "My mind rebels at stagnation."
 Image     : data/output/df328328a2e7/frame.jpg
 Score     : 100.0
-Face      : 1 detected (best 0.95)
+Face      : detected (confidence 0.95)
 Mouth     : moving (score 0.074)
 Verify    : asr_large_model -> confirmed (100.0)
 Scanned   : 330.3s of audio
@@ -160,7 +161,7 @@ fakes standing in for all of them.
 ## Run — tests
 
 ```bash
-python -m pytest                                  # offline suite with live logs (~10 s)
+python -m pytest                                  # offline suite with live logs (~20 s)
 python -m pytest --log-cli-level=WARNING -q       # quiet
 DL_RUN_NETWORK_TESTS=1 python -m pytest -m network    # real yt-dlp downloads
 DL_RUN_MODEL_TESTS=1  python -m pytest -k real        # real Whisper models (downloads weights)

@@ -18,7 +18,7 @@ Frame     : 7799
 Text      : "My mind rebels at stagnation."
 Image     : data/output/df328328a2e7/frame.jpg
 Score     : 100.0
-Face      : 1 detected (best 0.95)
+Face      : detected (confidence 0.95)
 Mouth     : moving (score 0.074)
 Verify    : asr_large_model -> confirmed (100.0)
 Scanned   : 330.3s of audio
@@ -44,13 +44,20 @@ heard but nobody is visibly saying it, the result says so (`not_onscreen`), and 
 matches at all, the three closest transcript windows are reported so you can see what the
 video actually says.
 
+If the line is said more than once, `matching.max_occurrences` (`--max-occurrences` on the
+command line, or the settings panel in the UI) decides how far to look. It defaults to 1, which
+judges the first occurrence and reports it whatever the verdict. Raise it (or set `-1` for all
+of them) and an occurrence that turns out not to be onscreen no longer ends the job: the search
+picks up where that one finished and the first occurrence actually delivered on camera wins,
+falling back to the first when none are.
+
 Where to read more:
 
 - [APPROACH.MD](APPROACH.MD): the full approach step by step, the key decisions and their
   trade offs, assumptions, and what I would improve.
 - [docs/02-architecture.md](docs/02-architecture.md): the flow chart, the architecture
   diagram, the class diagram, and the data types between stages.
-- [docs/09-decision-log.md](docs/09-decision-log.md): 24 decisions with the evidence behind
+- [docs/09-decision-log.md](docs/09-decision-log.md): 33 decisions with the evidence behind
   each. The rest of [docs/](docs/README.md) covers every module, configuration, testing and
   operations.
 - [prompts.txt](prompts.txt): the LLM prompts I used while building this.

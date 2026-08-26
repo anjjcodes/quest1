@@ -51,8 +51,13 @@ web/static/app.js           vanilla JS client — talks only to /api/*
   mutated. The three stage toggles are **order dependent**: `cascadeStages()` unchecks and
   disables each downstream box when its upstream is off, in the order verification → face
   detection → mouth movement, and `apply_setting_overrides` enforces the same cascade server side.
-  Six numeric fields are validated with `checkValidity()` before Apply; there is a reset to
-  defaults, and Escape or a backdrop click closes.
+  Seven numeric fields are validated with `checkValidity()` before Apply (`max_occurrences`
+  additionally rejects `0`, which `checkValidity()` cannot express alongside `-1`); there is a
+  reset to defaults, and Escape or a backdrop click closes.
+* **Occurrence chip**: while a job runs, progress `details.attempt` is shown as
+  "Occurrence N of M" (just "Occurrence N" when `max_occurrences` is `-1`, which has no M).
+  Without it the stepper appears to silently rewind to transcription when an occurrence is
+  rejected as not onscreen.
 
 ## Styling notes (`app.css`)
 

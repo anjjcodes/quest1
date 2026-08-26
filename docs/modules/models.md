@@ -85,6 +85,10 @@ class MouthMovementResult:
     threshold: float
     frames_analyzed, frames_with_face: int
     window_start, window_end: float
+    movement_start: float | None  # start of the highest-scoring window; set only on a
+                                  # positive verdict — the frame the result reports
+    face_start: float | None      # first landmarked face in the window, verdict aside; the
+                                  # frame reported when the line itself opens off camera
 ```
 
 ## Frame

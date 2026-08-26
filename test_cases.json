@@ -33,16 +33,16 @@
     "name": "President Kennedy's Speech at Rice University",
     "link": "https://www.youtube.com/watch?v=WZyRbnpGyzQ",
     "dialogue": "We choose to go to the moon in this decade and do the other things",
-    "type": "onscreen (face present, mouth moving - 0.058, 54/264 frames)"
+    "type": "onscreen (face present, mouth moving) - validated: mouth 0.0577 over 54/264 frames"
   },
   {
     "name": "Do Not Skip this video!",
     "link": "https://www.youtube.com/watch?v=T9QoUzPp-VY",
     "dialogue": "It is still our website",
-    "type": "onscreen (face present, mouth moving - 0.102)"
+    "type": "onscreen (face present, mouth moving) - validated: mouth 0.1019 over 35/35 frames"
   },
   {
-    "name": "FRIENDS — Monica's Barbados hair",
+    "name": "FRIENDS \u2014 Monica's Barbados hair",
     "link": "https://www.youtube.com/watch?v=QPngpHrP924",
     "dialogue": "Not really",
     "type": "borderline - do not treat as ground truth: the dialogue matches \"You really\" at exactly the 80.0 match threshold, and the mouth scores 0.032 against a 0.030 threshold (two faces, 18 frames). Currently reports onscreen. Useful as a canary for threshold changes, not as a pass/fail case."
@@ -51,7 +51,7 @@
     "name": "ok.ru sample video",
     "link": "https://ok.ru/video/1829048486505",
     "dialogue": "Killing all the birds",
-    "type": "found (V1 run) - ok.ru clip fetch is blocked from some networks; verify locally"
+    "type": "environmental: the last validation run errored (exit 1) before producing a verdict; ok.ru reachability is ISP-dependent, see docs/07-operations-troubleshooting.md"
   },
   {
     "name": "SPIDER-MAN: BRAND NEW DAY - Official Trailer (HD)",
@@ -70,5 +70,11 @@
     "link": "https://www.youtube.com/watch?v=62bIsvRcPv0",
     "dialogue": "you found a way to suppress mutating dna right",
     "type": "onscreen (line starts off camera, cuts to the speaker mid-line)"
+  },
+  {
+    "name": "Dua Lipa Answers the Web's Most Searched Questions | WIRED",
+    "link": "https://www.youtube.com/watch?v=esfChb49_Rk",
+    "dialogue": "support Liverpool?",
+    "type": "repeated line - needs matching.max_occurrences > 1. Occurrence 1 at 00:01:26.563 is the question read over a card closeup (0/21 frames with a face) and is correctly not_onscreen; occurrence 2 at 00:01:40.723 is her answer on camera (mouth 0.0516 over 14/14 frames) and is the right answer. Validated both ways: at the default it reports not_onscreen at 1:26 (that is the run recorded here), and with DL_MATCHING__MAX_OCCURRENCES=2 it reports 1:40.7."
   }
 ]

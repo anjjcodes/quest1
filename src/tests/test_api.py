@@ -11,7 +11,7 @@ from fastapi.testclient import TestClient
 
 from dialogue_locator.api.app import create_app
 from dialogue_locator.api.jobs import JobManager
-from dialogue_locator.config import MouthMovementConfig, Settings
+from dialogue_locator.config import MatchingConfig, MouthMovementConfig, Settings
 from dialogue_locator.exceptions import DownloadError, PipelineCancelledError
 from dialogue_locator.models import (
     FrameInfo,
@@ -280,6 +280,32 @@ def test_job_with_settings_overrides(client):
     assert wait_finished(client, job["job_id"])["status"] == "done"
     # nothing was stored server-side: defaults are untouched
     assert client.get("/api/settings").json()["match_threshold"] == 80.0
+
+
+def test_settings_expose_max_occurrences(client):
+    s = client.get("/api/settings").json()
+    assert s["max_occurrences"] == MatchingConfig().max_occurrences == 1
+
+
+@pytest.mark.parametrize("value", [3, -1])
+def test_job_with_max_occurrences_override(client, value):
+    """A count, or -1 for every occurrence, reaches the job's effective settings."""
+    body = client.get("/api/settings").json()
+    body["max_occurrences"] = value
+    create = {"source": "https://ok.ru/video/1", "dialogue": DIALOGUE, "settings": body}
+    job = client.post("/api/jobs", json=create).json()
+    assert job["settings"]["max_occurrences"] == value
+    assert wait_finished(client, job["job_id"])["status"] == "done"
+    assert client.get("/api/settings").json()["max_occurrences"] == 1  # defaults untouched
+
+
+@pytest.mark.parametrize("value", [0, -2])
+def test_invalid_max_occurrences_is_422(client, value):
+    """0 and other negatives are rejected up front, not silently by model_copy."""
+    body = client.get("/api/settings").json()
+    body["max_occurrences"] = value
+    create = {"source": "https://ok.ru/video/1", "dialogue": DIALOGUE, "settings": body}
+    assert client.post("/api/jobs", json=create).status_code == 422
 
 
 def test_job_settings_cascade_downstream_only(client):

@@ -18,8 +18,11 @@ class FaceDetector:
 
 * Backend: BlazeFace short-range via the MediaPipe Tasks API (`.tflite`, ~230 KB).
 * `min_detection_confidence` default **0.3**, calibrated on real frames: faces in cinematic
-  mid/wide shots score as low as ~0.34 (close-ups ~0.97) while non-face junk stays ≤ ~0.2;
-  MediaPipe's usual 0.5 default misses distant faces.
+  mid/wide shots score as low as ~0.30 (close-ups ~0.97), so MediaPipe's usual 0.5 default
+  misses distant faces. This threshold **cannot separate faces from non-faces on its own**:
+  blurred rubble in a low-quality source measured **0.45–0.62**, above what real faces score
+  here. What rejects those crops is the landmarker's second opinion
+  (`mouth_movement.min_face_confidence`), so this stays loose and V3 decides — decision 30.
 * Boxes are clamped to the image; results are sorted best-confidence first.
 * The detector instance is cached after the first call but is **not thread-safe** — one pipeline
   job at a time (the server default) is fine.
@@ -51,8 +54,16 @@ class MouthMovementAnalyzer:
 * Windows never span a shot change (`shot_change_shift` / `shot_change_scale`) or a gap longer
   than `max_gap_seconds`: the step between two still faces' resting mouths is not a mouth
   opening.
-* Verdict is **indeterminate** (`moving=None`, pipeline fails open) when fewer than
-  `min_face_frames` frames contain a face — absence of a face is not evidence of a still mouth.
+* Verdict is **indeterminate** (`moving=None`) when fewer than `min_face_frames` frames contain
+  a face — absence of a face is not evidence of a still mouth. What the *pipeline* does with that
+  is not uniform: a handful of landmarked frames across a whole line is evidence against a face,
+  so it settles as `not_onscreen`; only a face present throughout that never formed a scorable
+  run fails open with a warning (decision 30).
+* `min_face_confidence` (**0.4**) is the landmarker's own presence threshold on the crop, and is
+  deliberately **stricter** than the 0.3 feeding it: two models must agree that a crop is a face.
+  At 0.4 the rubble above drops from 18 landmarked frames to 4 while real faces are untouched;
+  0.3 lets it through at 0.101, 0.5 loses a real speaker in a soft upscaled TV master
+  (0.053 → 0.022), 0.7 reads a listener's landmark noise as speech.
 * Frames are read sequentially after one seek (the clip is only a few seconds long). A fresh
   landmarker is created per `analyze()` call: VIDEO mode requires monotonically increasing
   timestamps for the lifetime of the landmarker, so a reused instance would crash on the next

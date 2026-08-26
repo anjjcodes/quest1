@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 
 from dialogue_locator import cli
-from dialogue_locator.config import Settings, reset_settings_cache
+from dialogue_locator.config import UNLIMITED_OCCURRENCES, Settings, reset_settings_cache
 from dialogue_locator.exceptions import DownloadError
 from dialogue_locator.models import (
     FaceBox,
@@ -175,3 +175,29 @@ def test_overrides_reach_settings():
     assert s.whisper.fast_model == "base" and s.whisper.verify_model == "small"
     assert s.verification.enabled is False and s.matching.match_threshold == 70
     assert s.download.max_height == 480 and s.logging.level == "DEBUG"
+
+
+@pytest.mark.parametrize("value", [2, UNLIMITED_OCCURRENCES])
+def test_max_occurrences_flag_reaches_settings(value):
+    FakePipeline.result, FakePipeline.error = _found(), None
+    cli.main(["u", "d", "-q", "--max-occurrences", str(value)], pipeline_factory=FakePipeline)
+    assert FakePipeline.last_settings.matching.max_occurrences == value
+
+
+def test_max_occurrences_flag_defaults_to_the_config_value():
+    FakePipeline.result, FakePipeline.error = _found(), None
+    cli.main(["u", "d", "-q", "--threshold", "70"], pipeline_factory=FakePipeline)
+    s: Settings = FakePipeline.last_settings
+    # --threshold alone must not disturb the other matching fields.
+    assert s.matching.match_threshold == 70
+    assert s.matching.max_occurrences == Settings().matching.max_occurrences == 1
+
+
+@pytest.mark.parametrize("value", ["0", "-2"])
+def test_invalid_max_occurrences_is_rejected(value, capsys):
+    # model_copy skips validation, so the CLI has to catch this itself or a 0
+    # would reach the pipeline and evaluate no occurrences at all.
+    FakePipeline.result, FakePipeline.error = _found(), None
+    with pytest.raises(SystemExit) as exc:
+        cli.main(["u", "d", "-q", "--max-occurrences", value], pipeline_factory=FakePipeline)
+    assert "--max-occurrences must be >= 1" in str(exc.value)

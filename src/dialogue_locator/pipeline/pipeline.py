@@ -12,12 +12,16 @@ Stages, in order (each maps to a :class:`PipelineStage`)::
                    full-quality video around the *verified* timestamp)
     frame          FrameExtractor    -> FrameInfo (image on disk)
     face_detection FaceDetector     -> FaceDetectionResult (V2: is a human face
-                   visible in the extracted frame? No face -> status becomes
-                   NOT_ONSCREEN; a failed check fails open with a warning)
-    mouth_movement MouthMovementAnalyzer -> MouthMovementResult (V3, only after
-                   V2 confirms a face: do the lips move during the matched
-                   window? Not moving -> NOT_ONSCREEN; indeterminate or failed
-                   fails open with a warning)
+                   visible in the extracted frame? No face -> a *provisional*
+                   NOT_ONSCREEN that V3 can overturn; a failed check fails open
+                   with a warning and skips V3)
+    mouth_movement MouthMovementAnalyzer -> MouthMovementResult (V3, after V2
+                   produced an answer, with or without a face in that one
+                   frame: do the lips move anywhere in the matched window? This
+                   stage settles the verdict and may move the answer frame to
+                   where the speaker is on camera. Not moving, or too few
+                   landmarked frames -> NOT_ONSCREEN; a face that never formed
+                   a scorable run, or a failed check, fails open with a warning)
     done
 
 The search stages run on a cheap audio-first download; full-quality video is

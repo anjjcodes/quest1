@@ -55,8 +55,9 @@ All three are implemented; further visual stages plug in the same way (see
 
 ## Vital statistics
 
-* ~8.5k lines under `src/` including tests; 309 tests (`pytest`), 302 of them offline by
-  default (the rest are opt-in behind a `network` marker or `DL_RUN_MODEL_TESTS=1`).
+* ~10k lines under `src/` including tests; **336 tests** (`pytest`), of which **329 run
+  offline** by default and the other **7 are opt-in** (5 behind a `network` marker, 2 behind
+  `DL_RUN_MODEL_TESTS=1`). See [Testing](06-testing.md).
 * Interfaces: CLI (`dialogue-locator`), HTTP API (`dialogue-locator-server`, FastAPI, OpenAPI at
   `/docs`), single-page web UI at `/`.
 * Measured on an Apple M2 (CPU, int8, 4 performance cores), reference ok.ru run

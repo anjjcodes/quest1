@@ -1,7 +1,13 @@
 import pytest
 from pydantic import ValidationError
 
-from dialogue_locator.config import MatchingConfig, Settings, get_settings, reset_settings_cache
+from dialogue_locator.config import (
+    UNLIMITED_OCCURRENCES,
+    MatchingConfig,
+    Settings,
+    get_settings,
+    reset_settings_cache,
+)
 
 
 def test_defaults_load():
@@ -32,6 +38,19 @@ def test_validation_rejects_out_of_range():
         MatchingConfig(match_threshold=150)
     with pytest.raises(ValidationError):
         Settings(server={"port": 0})
+
+
+def test_max_occurrences_accepts_a_count_or_unlimited():
+    assert MatchingConfig(max_occurrences=1).max_occurrences == 1
+    assert MatchingConfig(max_occurrences=5).max_occurrences == 5
+    # -1 means "evaluate every occurrence in the video"
+    assert MatchingConfig(max_occurrences=UNLIMITED_OCCURRENCES).max_occurrences == -1
+
+
+@pytest.mark.parametrize("value", [0, -2, -10])
+def test_max_occurrences_rejects_zero_and_other_negatives(value):
+    with pytest.raises(ValidationError, match="max_occurrences"):
+        MatchingConfig(max_occurrences=value)
 
 
 def test_get_settings_is_cached():

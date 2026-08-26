@@ -323,8 +323,11 @@ class MouthMovementConfig(BaseModel):
 
     enabled: bool = Field(
         True,
-        description="Run the mouth-movement check. Only runs when the face "
-        "check is enabled and confirmed a face.",
+        description="Run the mouth-movement check, which settles the onscreen "
+        "verdict. Needs the face check enabled (it crops to that detector's "
+        "boxes) but not a face in the reported frame: a line can open on a "
+        "title card and cut to the speaker, so this stage scans the whole "
+        "window and can overturn the face check either way.",
     )
     movement_threshold: float = Field(
         0.03,

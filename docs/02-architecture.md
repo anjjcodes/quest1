@@ -64,10 +64,13 @@ flowchart TD
     V -->|"confirmed, or rejected with a warning"| CL["download a high quality clip, 5 s padding around the match"]
     CL --> FR["frame number = floor(t × fps), save the frame image"]
     FR --> FC{"face visible in the frame? (V2)"}
-    FC -->|no| NO["NOT_ONSCREEN (match details still reported)"]
-    FC -->|yes| MM{"mouth moving during the line? (V3)"}
-    MM -->|no| NO
-    MM -->|yes| OK["FOUND: timestamp, frame, text, image"]
+    FC -->|"no — provisional, V3 can overturn it"| MM
+    FC -->|yes| MM{"mouth moving anywhere in the window? (V3)<br/>this stage settles the verdict"}
+    MM -->|no| RETRY{"more occurrences allowed?<br/>matching.max_occurrences"}
+    RETRY -->|yes| RESUME["resume the search past this occurrence<br/>(tail slice + offset)"]
+    RESUME --> E
+    RETRY -->|no| NO["NOT_ONSCREEN (match details still reported;<br/>frame moved to the face being called silent)"]
+    MM -->|yes| OK["FOUND: timestamp, frame, text, image<br/>(frame moved to where the speaker is on camera)"]
 ```
 
 Concrete types at each arrow (all in `models.py`):
@@ -81,7 +84,7 @@ Concrete types at each arrow (all in `models.py`):
 | verification → download_video | `MatchCandidate` (possibly `refined`) | plus `VerificationOutcome` per verifier |
 | download_video → frame | `VideoInfo` | a full-quality clip; `clip_start` maps source time → clip time |
 | frame → face_detection | `FrameInfo` | frame number, exact frame time, image path |
-| face_detection → mouth_movement | `FaceDetectionResult` | mouth check only runs on a confirmed face |
+| face_detection → mouth_movement | `FaceDetectionResult` | the boxes V3 crops to; a face in this one frame is **not** required, only that the check ran |
 | mouth_movement → result | `MouthMovementResult` | `moving` may be None (indeterminate → fail open) |
 
 ## Class diagram
@@ -160,6 +163,7 @@ input           0.0 s   validate; fails before any I/O
 download        1–60 s  audio-first search fetch; cached per source URL (sha1) under data/work/<key>/
 audio           1–5 s   ffmpeg → audio.wav (cached with the media)
 transcription   N×      streams until first match; progress = position in audio; VAD-off retry on a miss
+                        (runs once per evaluated occurrence; timings accumulate)
 matching        0       folded into transcription (scored per word)
 verification    5–60 s  larger model on ±12 s; skipped ≥ 90; refines or warns
 download_video  2–30 s  a few seconds of full-quality clip around the verified match
@@ -180,6 +184,7 @@ mouth_movement  1–5 s   Face Landmarker over the window's frames (V3); settles
 | Swap ASR engine | subclass `transcription.base.Transcriber` | transcription/, pipeline (constructor) |
 | Try another fuzzy scorer | pass `scorer=` to `StreamingMatcher` / `best_match` | nothing else |
 | Persist jobs in Redis/DB | replace `api/jobs.py` | api/ only |
+| Judge more than the first occurrence | set `matching.max_occurrences` (`-1` = all), via config, `--max-occurrences`, or the UI settings panel | no code |
 
 See [Extending](08-extending.md) for worked examples.
 

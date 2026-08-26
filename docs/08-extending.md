@@ -15,7 +15,8 @@ say, a "subtitle text on screen" check (V4):
 2. Add a config block in `config.py` (`enabled` flag + thresholds) — the `DL_…` env override
    comes for free — and a result dataclass in `models.py` plus a field on `LocalizationResult`.
 3. Add a `PipelineStage` member and a `_stage_*` method in `_Run`, called after the stages it
-   builds on (see the mouth check: it only runs when the face check confirmed a face). Decide
+   builds on (see the mouth check: it needs the face check to have *run*, for the boxes it
+   crops to, but not to have found a face — and it can overturn that check's verdict). Decide
    what a negative verdict means for `ResultStatus` and keep the fail-open pattern.
 4. Inject the analyser through `DialoguePipeline.__init__` like `face_detector` /
    `mouth_analyzer`, add a fake in `test_pipeline.py`, and (optionally) a toggle in
