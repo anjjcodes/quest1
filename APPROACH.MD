@@ -393,7 +393,10 @@ actually asked. It is case 13 in `test_cases.json`.
   performance cores finish and then wait at the barrier for the efficiency cores. Scanning the
   same 331 s of audio with `base`/int8, producing byte identical output every time: 5.4 s at 4
   threads, 90.7 s at 6, 90.9 s at 8. A 17x cliff the moment work lands on an efficiency core.
-  The verify pass behaves the same way, 9.7 s against 17.3 s. I found this only because a run
+  The verify pass behaves the same way, 9.7 s against 17.3 s, on its own much smaller input:
+  it reads the 26.5 s window around the candidate, never the whole track. The 21.4 s in the
+  Results section is that same window inside a live server run rather than isolated, the same
+  gap the transcription numbers show. I found this only because a run
   that should have taken 25 seconds took two and a half minutes, and the raw library on the
   same audio with the same settings was 5x faster than my own wrapper around it — the gap
   between those two numbers was the whole bug. The general lesson I took: "use all the cores"
@@ -459,7 +462,8 @@ back with one face at 0.953 confidence, and V3 scored the mouth at 0.074 over 74
 of which had a face, then moved the answer frame to the start of the most active window. It
 scanned 5 minutes 30 seconds of audio to get there, and finished in **56.7 seconds** with the
 audio cached: transcription 29.5 s, verification 21.4 s, the two visual checks 4.2 s, and
-everything else 1.5 s.
+everything else 1.5 s. Those four are rounded to a tenth and each happens to round down, so
+they add to 56.6 against a measured total of 56.67.
 
 The required input turns out to be one of the harder cases in its own right. The line's audio
 starts at 00:05:24.640, but the speaker is not on camera yet; the mouth check finds the
@@ -489,10 +493,11 @@ The kinds of cases I actually ran, and what happened:
   zoo video. These are the upper cluster in Step 8's calibration, 0.046 to 0.117.
 - Dialogue present but no face in the frame: a title card and an off camera line both came
   back `not_onscreen`, with the full match details still reported.
-- Face present but mouth not moving: the face scored 0.343, which is exactly the wide shot
-  case the 0.3 threshold exists for, while the mouth landed under the movement threshold, so
-  the verdict was `not_onscreen`. The Spider-Man trailer's "my name is Peter Parker" is the
-  same shape, a voice over read over a visible face.
+- Face present but mouth not moving: the face scored 0.343 at 305 px across, about 16 percent
+  of the frame width, which is exactly the wide shot case the 0.3 threshold exists for, while
+  the mouth landed under the movement threshold, so the verdict was `not_onscreen`. The
+  Spider-Man trailer's "my name is Peter Parker" is the same shape, a voice over read over a
+  visible face.
 - Onscreen at the start, camera cuts away for the rest ("im just a neighbour across the
   hall"): the sliding window scores the seconds the speaker is actually on camera and the
   cutaway afterwards cannot dilute them, so this is `found`. A single score over the whole
@@ -522,13 +527,17 @@ Known and not handled, stated plainly rather than left to be discovered:
   few pixels across and is not found at all. The case that showed me this is the FRIENDS
   bookshelf building scene, three people spread across a wide living room shot, on the line
   "I'm supposed to attach a brackety thing to the side things". The man saying it is clearly on
-  camera and clearly mid sentence, but his face is 48 px in a 1920x1080 frame and the detector
-  found nothing in all 96 frames of the line, so the mouth check had nothing to judge and a
-  real onscreen line came back off screen. The cause is size, not angle: it is not a
-  resolution limit either. Crop a 350x260 region around that same face, same angle, same
-  frame, and the same detector finds it at 0.97; and a confirmed speaker shrunk to a 48 px face
-  still scores 0.045 when it fills enough of the frame. The fix is tiled
-  detection, searching sub regions when the full frame pass finds nothing. I measured it on
+  camera and clearly mid sentence, but his face is 48 px in a 1920x1080 frame, 2.5 percent of
+  the width, and the detector found nothing in all 96 frames of the line, so the mouth check
+  had nothing to judge and a real onscreen line came back off screen. Not every wide shot
+  fails this way, and what separates them is relative size rather than the shot type: the
+  0.343 face above is 16 percent of the width and is found comfortably, six times the share
+  this one has. So the cause is size, not angle, and it is not a resolution limit either.
+  Crop a 350x260 region around that same face, same angle, same frame, and the same detector
+  finds it at 0.97 confidence; and a confirmed speaker shrunk to a 48 px face still scores
+  0.045 on the mouth check, just under the speaking cluster, once the crop fills enough of the
+  frame. The pixels carry the answer either way; it is the letterbox that loses it. The fix is
+  tiled detection, searching sub regions when the full frame pass finds nothing. I measured it on
   that frame: a 4x4 grid reaches the speaker at 0.33 and a 6x6 grid at 0.68, costing 40 to
   90 ms on only the frames that need it. I left it out because of the next point, which makes
   it a bigger job than it looks.

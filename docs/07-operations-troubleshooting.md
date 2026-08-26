@@ -19,7 +19,7 @@ run) or set `DL_STORAGE__KEEP_INTERMEDIATE=false`.
 |---|---|
 | streaming pass, `base` | ≈ 11× realtime in a live server run; ≈ 40-60× isolated on an idle machine |
 | streaming pass, `small` | ≈ 3× realtime → worst case ≈ 18 min |
-| verification, `small`, ±12 s window | 21.4 s in the reference run (skipped entirely when the first pass scores ≥ 90) |
+| verification, `small`, ±12 s window | 26.5 s of audio: 21.4 s in the live reference run, 9.7 s isolated (skipped entirely when the first pass scores ≥ 90) |
 | thread count (`whisper.cpu_threads`) | 4 P-cores 5.4 s vs 8 cores 90.9 s for the same 331 s scan — see below |
 | model load (cached weights) | `base` 1 s, `medium` 3–25 s (first load converts to int8) |
 | first-time weight download | `base` 140 MB, `small` 460 MB, `medium` 1.5 GB |
