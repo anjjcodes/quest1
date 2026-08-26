@@ -89,8 +89,9 @@ class WhisperConfig(BaseModel):
 
     fast_model: str = Field(
         "base",
-        description="Model for the streaming pass. 'base' runs ~12x realtime on Apple Silicon CPU "
-        "(vs ~3x for 'small') with near-identical hit rate; the verify model fixes wording/timing.",
+        description="Model for the streaming pass. 'base' runs ~60x realtime on Apple "
+        "Silicon performance cores (vs ~3x for 'small') with near-identical hit rate; "
+        "the verify model fixes wording/timing.",
     )
     verify_model: str = Field(
         "small",
@@ -107,8 +108,11 @@ class WhisperConfig(BaseModel):
     cpu_threads: int = Field(
         0,
         ge=0,
-        description="Intra-op threads for CPU inference. 0 = use all CPU cores "
-        "(ctranslate2's own default is only 4, leaving most of a modern CPU idle).",
+        description="Intra-op threads for CPU inference. 0 = size the pool to the "
+        "machine's performance cores (see transcription.faster_whisper."
+        "performance_cores). Deliberately not every core: on Apple Silicon the "
+        "efficiency cores drag every parallel region down to their own speed, and "
+        "an M2 measured 5.4 s at 4 threads against 90.9 s at 8 for the same scan.",
     )
     language: str | None = Field(
         "en",

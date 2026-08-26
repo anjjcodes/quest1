@@ -229,3 +229,12 @@ Since we completed most part now, lets refine the frontend a little, first the c
  and with that make a settings button in top right corner of frontend, and when clicked opens a pop-up it should show all the parameters and have validators, mainly the verification selection should be dependent in order like wishpher -> face -> lips detection.
 
 
+Prompt 24:
+In this video i gave, while the person is talking another person is showed, but at the end of the dialogue that person is shown like "mutating dna part " camera shifts to the speaker. thats also on screen dialogue right..but its shown not as an on screen dialogue
+
+Prompt 25:
+Ill tell you the edge cases properly
+Full face shown + mouth moving → on-screen
+Full face shown + mouth NOT moving (narration/voiceover/dubbed) → off-screen
+Face shown first with mouth movement, then camera cuts away for rest of dialogue → on-screen
+Dialogue starts off-camera, camera returns to speaker mid-dialogue (with mouth movement visible once shown) → on-screen

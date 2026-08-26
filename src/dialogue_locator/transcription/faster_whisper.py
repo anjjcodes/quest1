@@ -15,8 +15,10 @@ Design notes
 
 from __future__ import annotations
 
+import functools
 import logging
 import os
+import subprocess
 import threading
 from collections.abc import Iterator
 from dataclasses import dataclass
@@ -40,6 +42,51 @@ logger = logging.getLogger(__name__)
 
 
 # --------------------------------------------------------------------------- #
+# Thread sizing
+# --------------------------------------------------------------------------- #
+@functools.lru_cache(maxsize=1)
+def performance_cores() -> int:
+    """Number of *performance* CPU cores, for sizing ctranslate2's thread pool.
+
+    Not ``os.cpu_count()``. On a big.LITTLE CPU - every Apple Silicon Mac -
+    that count includes the efficiency cores, and handing them to ctranslate2
+    is actively harmful: each parallel region runs at the speed of its slowest
+    thread, so the performance cores finish and then wait at the barrier for
+    the efficiency cores. Measured on an M2 (4P + 4E), scanning 331 s of audio
+    with ``base``/int8, identical output every time:
+
+        threads=4 (P only)   5.4 s   62x realtime
+        threads=6           90.7 s   3.6x
+        threads=8 (all)     90.9 s   3.6x
+
+    A 17x cliff the moment work lands on an efficiency core. The verify pass
+    behaves the same way (``small``/beam 5 on a 27.7 s window: 9.7 s at 4
+    threads, 17.3 s at 8).
+
+    macOS exposes the split via ``hw.perflevel0.logicalcpu`` (perflevel0 is
+    always the fastest tier). Everywhere else there is no portable way to ask,
+    so this falls back to ``os.cpu_count()``, which is correct on a homogeneous
+    CPU and no worse than the previous behaviour on a heterogeneous one.
+    """
+    fallback = os.cpu_count() or 4
+    try:
+        out = subprocess.run(
+            ["sysctl", "-n", "hw.perflevel0.logicalcpu"],
+            capture_output=True,
+            text=True,
+            timeout=2,
+            check=True,
+        )
+        cores = int(out.stdout.strip())
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return fallback  # not macOS, or sysctl unavailable / unexpected output
+    if cores < 1:
+        return fallback
+    logger.debug("Sizing Whisper thread pool to %d performance core(s)", cores)
+    return cores
+
+
+# --------------------------------------------------------------------------- #
 # Model cache
 # --------------------------------------------------------------------------- #
 @dataclass(frozen=True)
@@ -59,10 +106,11 @@ class WhisperModelCache:
         self._lock = threading.Lock()
 
     def get(self, model_name: str, config: WhisperConfig) -> Any:
-        # 0 = use every core: ctranslate2's own default is 4 intra-op threads,
-        # which leaves half an 8-core machine idle. Resolved here so the cache
-        # key holds the effective value.
-        cpu_threads = config.cpu_threads or (os.cpu_count() or 4)
+        # 0 = size the pool to the performance cores. Not every core: on
+        # Apple Silicon the efficiency cores make decoding ~17x slower, not
+        # faster. See performance_cores(). Resolved here so the cache key
+        # holds the effective value.
+        cpu_threads = config.cpu_threads or performance_cores()
         key = _ModelKey(
             model_name,
             config.device,

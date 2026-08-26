@@ -300,3 +300,97 @@ def test_real_tiny_model_on_speech(tmp_path: Path):
     text = " ".join(w.text.lower().strip(".,") for w in words)
     assert "mind" in text and "stagnation" in text
     assert all(w.start <= w.end for w in words)
+
+
+# --------------------------------------------------------------------------- #
+# Thread sizing
+# --------------------------------------------------------------------------- #
+def test_zero_threads_resolves_to_performance_cores(monkeypatch):
+    """cpu_threads=0 must size to the performance cores, not every core.
+
+    On Apple Silicon the efficiency cores make decoding ~17x slower, so the
+    resolved value has to be the P-core count and it has to reach the model.
+    """
+    import dialogue_locator.transcription.faster_whisper as fw
+
+    monkeypatch.setattr(fw, "performance_cores", lambda: 4)
+    seen: list[int] = []
+
+    def fake_load(key):
+        seen.append(key.cpu_threads)
+        return object()
+
+    monkeypatch.setattr(fw.WhisperModelCache, "_load", staticmethod(fake_load))
+    fw.WhisperModelCache().get("tiny", WhisperConfig(cpu_threads=0))
+    assert seen == [4]
+
+
+def test_explicit_thread_count_is_respected(monkeypatch):
+    import dialogue_locator.transcription.faster_whisper as fw
+
+    monkeypatch.setattr(fw, "performance_cores", lambda: 4)
+    seen: list[int] = []
+    monkeypatch.setattr(
+        fw.WhisperModelCache,
+        "_load",
+        staticmethod(lambda key: seen.append(key.cpu_threads) or object()),
+    )
+    fw.WhisperModelCache().get("tiny", WhisperConfig(cpu_threads=2))
+    assert seen == [2]
+
+
+def test_performance_cores_uses_sysctl_when_available(monkeypatch):
+    import subprocess
+
+    import dialogue_locator.transcription.faster_whisper as fw
+
+    fw.performance_cores.cache_clear()
+    monkeypatch.setattr(
+        fw.subprocess,
+        "run",
+        lambda *a, **k: subprocess.CompletedProcess(a[0], 0, stdout="4\n", stderr=""),
+    )
+    try:
+        assert fw.performance_cores() == 4
+    finally:
+        fw.performance_cores.cache_clear()
+
+
+@pytest.mark.parametrize(
+    "outcome",
+    [OSError("no sysctl"), ValueError("bad int")],
+    ids=["missing-sysctl", "unparseable"],
+)
+def test_performance_cores_falls_back_to_cpu_count(monkeypatch, outcome):
+    """Off macOS there is no sysctl; fall back rather than crash the load."""
+    import dialogue_locator.transcription.faster_whisper as fw
+
+    fw.performance_cores.cache_clear()
+
+    def boom(*a, **k):
+        raise outcome
+
+    monkeypatch.setattr(fw.subprocess, "run", boom)
+    monkeypatch.setattr(fw.os, "cpu_count", lambda: 16)
+    try:
+        assert fw.performance_cores() == 16
+    finally:
+        fw.performance_cores.cache_clear()
+
+
+def test_performance_cores_rejects_nonsense_core_count(monkeypatch):
+    import subprocess
+
+    import dialogue_locator.transcription.faster_whisper as fw
+
+    fw.performance_cores.cache_clear()
+    monkeypatch.setattr(
+        fw.subprocess,
+        "run",
+        lambda *a, **k: subprocess.CompletedProcess(a[0], 0, stdout="0\n", stderr=""),
+    )
+    monkeypatch.setattr(fw.os, "cpu_count", lambda: 8)
+    try:
+        assert fw.performance_cores() == 8
+    finally:
+        fw.performance_cores.cache_clear()

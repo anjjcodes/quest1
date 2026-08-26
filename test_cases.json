@@ -36,12 +36,6 @@
     "type": "found (V1 run; visual checks not run)"
   },
   {
-    "name": "Avengers: Infinity War (2018)",
-    "link": "https://www.youtube.com/watch?v=Y2qHIb76NIY",
-    "dialogue": "you're not the only one cursed with knowledge",
-    "type": "found (V1 run; visual checks not run)"
-  },
-  {
     "name": "Do Not Skip this video!",
     "link": "https://www.youtube.com/watch?v=T9QoUzPp-VY",
     "dialogue": "It is still our website",
@@ -51,12 +45,30 @@
     "name": "FRIENDS — Monica's Barbados hair",
     "link": "https://www.youtube.com/watch?v=QPngpHrP924",
     "dialogue": "Not really",
-    "type": "not onscreen (no face in frame)"
+    "type": "borderline - do not treat as ground truth: the dialogue matches \"You really\" at exactly the 80.0 match threshold, and the mouth scores 0.032 against a 0.030 threshold (two faces, 18 frames). Currently reports onscreen. Useful as a canary for threshold changes, not as a pass/fail case."
   },
   {
     "name": "ok.ru sample video",
     "link": "https://ok.ru/video/1829048486505",
     "dialogue": "Killing all the birds",
     "type": "found (V1 run; visual checks not run)"
+  },
+  {
+    "name": "SPIDER-MAN: BRAND NEW DAY - Official Trailer (HD)",
+    "link": "https://www.youtube.com/watch?v=8TZMtslA3UY",
+    "dialogue": "my name is Peter Parker",
+    "type": "not onscreen (face visible but mouth not moving - voice-over)"
+  },
+  {
+    "name": "SPIDER-MAN: BRAND NEW DAY - Official Trailer (HD)",
+    "link": "https://www.youtube.com/watch?v=8TZMtslA3UY",
+    "dialogue": "im just a neighbour across the hall",
+    "type": "onscreen (face and mouth moving at the start, camera cuts away for the rest)"
+  },
+  {
+    "name": "SPIDER-MAN: BRAND NEW DAY - New Trailer (4K)",
+    "link": "https://www.youtube.com/watch?v=62bIsvRcPv0",
+    "dialogue": "you found a way to suppress mutating dna right",
+    "type": "onscreen (line starts off camera, cuts to the speaker mid-line)"
   }
 ]

@@ -44,9 +44,6 @@ pytestmark = requires_ffmpeg
 DIALOGUE = "My mind rebels at stagnation"
 
 
-# --------------------------------------------------------------------------- #
-# fakes
-# --------------------------------------------------------------------------- #
 class FakeDownloader:
     def __init__(self, video_path: Path, error: Exception | None = None, has_video: bool = True):
         self.video_path = video_path
