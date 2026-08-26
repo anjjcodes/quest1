@@ -12,7 +12,7 @@
     form: $("job-form"), source: $("source"), dialogue: $("dialogue"), reuse: $("reuse"),
     submit: $("submit-btn"), cancel: $("cancel-btn"), formError: $("form-error"),
     jobId: $("job-id"), stages: $("stages"),
-    bar: $("progress-bar"), message: $("progress-message"), pct: $("progress-pct"), log: $("event-log"), logCount: $("log-count"),
+    bar: $("progress-bar"), message: $("progress-message"), pct: $("progress-pct"), attempt: $("progress-attempt"), log: $("event-log"), logCount: $("log-count"),
     resultCard: $("result-card"), resultBadge: $("result-badge"), empty: $("result-empty"),
     found: $("result-found"), notFound: $("result-notfound"), errorBox: $("result-error"), json: $("result-json"),
     jobRows: $("job-rows"), health: $("health"), refresh: $("refresh-jobs"), copy: $("copy-btn"),
@@ -176,6 +176,17 @@
       else if (i === idx) li.classList.add(finished ? "failed" : "active");
     }
 
+    // Which occurrence of the dialogue is being evaluated (max_occurrences > 1):
+    // without this chip the stepper silently rewinds to transcription when an
+    // occurrence is rejected as not onscreen.
+    // max_attempts is absent when every occurrence is being evaluated (-1),
+    // so there is no "of N" to show - just which one we are on.
+    const att = p && p.details && p.details.attempt ? p.details : null;
+    els.attempt.hidden = !(att && job.status === "running");
+    if (att) els.attempt.textContent = att.max_attempts
+      ? `Occurrence ${att.attempt} of ${att.max_attempts}`
+      : `Occurrence ${att.attempt}`;
+
     if (job.status === "queued") {
       els.message.textContent = "Queued — waiting for a free worker…"; els.pct.textContent = "";
       els.bar.className = "bar indeterminate";
@@ -194,7 +205,8 @@
     for (let i = renderedEvents; i < log.length; i++) {
       const e = log[i];
       const li = document.createElement("li");
-      li.innerHTML = `<span class="t">${esc(fmtClock(e.at))}</span><span class="s">${esc(e.stage)}</span><span>${esc(stripPct(e.message))}${e.fraction != null ? " · " + pctText(e.fraction) : ""}</span>`;
+      const occ = e.details && e.details.attempt ? `#${e.details.attempt} ` : "";
+      li.innerHTML = `<span class="t">${esc(fmtClock(e.at))}</span><span class="s">${esc(occ + e.stage)}</span><span>${esc(stripPct(e.message))}${e.fraction != null ? " · " + pctText(e.fraction) : ""}</span>`;
       els.log.appendChild(li);
     }
     renderedEvents = log.length;
@@ -291,9 +303,12 @@
     $("r-verify").innerHTML = (r.verifications || []).map((v) =>
       `<span class="badge ${esc(v.status)}" title="${esc(v.message || "")}">${esc(v.verifier)} · ${esc(v.status)}${v.score != null ? " " + v.score.toFixed(1) : ""}</span>`).join(" ")
       || `<span class="badge none">disabled</span>`;
+    // Presence, not a head count: the detector runs at a deliberately loose
+    // threshold (real faces in wide shots score ~0.30), so it also fires on
+    // non-faces. Only the best box is ever judged, so that is what is reported.
     const fd = r.face_detection;
     $("r-face").innerHTML = r.face_present === true
-      ? `<span class="badge confirmed">${fd.face_count} face${fd.face_count > 1 ? "s" : ""} · ${(fd.faces[0].confidence * 100).toFixed(0)}%</span>`
+      ? `<span class="badge confirmed">face detected · ${(fd.faces[0].confidence * 100).toFixed(0)}%</span>`
       : r.face_present === false
         ? `<span class="badge not_onscreen">no face in frame</span>`
         : `<span class="badge none">not run</span>`;
@@ -397,6 +412,7 @@
     STAGE_BOXES[2].checked = s.stages.mouth_movement;
     cascadeStages(null);
     $("cfg-threshold").value = s.match_threshold;
+    $("cfg-occurrences").value = s.max_occurrences;
     $("cfg-face-conf").value = s.face_min_confidence;
     $("cfg-mouth-thr").value = s.mouth_movement_threshold;
     $("cfg-mouth-frames").value = s.mouth_min_face_frames;
@@ -429,8 +445,16 @@
   els.settingsSave.addEventListener("click", () => {
     // A blank or out-of-range number would only surface as a server 422 at
     // submit time; catch it here, next to the field.
-    const fields = ["cfg-threshold", "cfg-face-conf", "cfg-mouth-thr", "cfg-mouth-frames", "cfg-mouth-window", "cfg-max-height"].map($);
+    const fields = ["cfg-threshold", "cfg-occurrences", "cfg-face-conf", "cfg-mouth-thr", "cfg-mouth-frames", "cfg-mouth-window", "cfg-max-height"].map($);
     for (const input of fields) {
+      if (input.id === "cfg-occurrences" && parseInt(input.value, 10) === 0) {
+        input.setCustomValidity("Use 1 or more, or -1 for every occurrence.");
+        input.reportValidity();
+        input.setCustomValidity("");
+        input.focus();
+        els.settingsStatus.textContent = "Fix the highlighted value first.";
+        return;
+      }
       if (input.value.trim() === "" || !input.checkValidity()) {
         input.reportValidity();
         input.focus();
@@ -446,6 +470,7 @@
         mouth_movement: STAGE_BOXES[2].checked,
       },
       match_threshold: parseFloat($("cfg-threshold").value),
+      max_occurrences: parseInt($("cfg-occurrences").value, 10),
       face_min_confidence: parseFloat($("cfg-face-conf").value),
       mouth_movement_threshold: parseFloat($("cfg-mouth-thr").value),
       mouth_min_face_frames: parseInt($("cfg-mouth-frames").value, 10),

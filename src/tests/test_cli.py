@@ -90,7 +90,8 @@ def test_format_found_with_face():
         image_height=240,
     )
     text = cli.format_result(result)
-    assert "Face      : 1 detected (best 0.97)" in text
+    # presence, not a head count: the loose detector also fires on non-faces
+    assert "Face      : detected (confidence 0.97)" in text
     assert "Verdict" not in text
 
 

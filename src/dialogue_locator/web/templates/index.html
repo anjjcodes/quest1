@@ -89,6 +89,7 @@
         <div class="progress-wrap">
           <div class="progress"><div id="progress-bar" class="bar"></div></div>
           <div class="progress-text" aria-live="polite">
+            <span id="progress-attempt" class="attempt-chip" hidden></span>
             <span id="progress-message">Waiting for a job…</span>
             <span id="progress-pct" class="pct"></span>
           </div>
@@ -215,6 +216,8 @@
       <div class="cfg-grid">
         <label for="cfg-threshold">Match threshold <span class="muted">0–100</span></label>
         <input id="cfg-threshold" type="number" min="0" max="100" step="1">
+        <label for="cfg-occurrences">Occurrences to evaluate <span class="muted">1 = first audible one, -1 = all</span></label>
+        <input id="cfg-occurrences" type="number" min="-1" max="20" step="1">
         <label for="cfg-face-conf">Face confidence <span class="muted">0–1</span></label>
         <input id="cfg-face-conf" type="number" min="0" max="1" step="0.05">
         <label for="cfg-mouth-thr">Mouth movement threshold</label>

@@ -95,8 +95,11 @@ def format_result(result: LocalizationResult) -> str:
             f"Score     : {result.match.score:.1f}",
         ]
         if result.face_present is True:
+            # Presence, not a head count: the detector is deliberately loose
+            # (real faces in wide shots score ~0.30) so it also fires on
+            # non-faces, and only the best box is ever judged.
             faces = result.face_detection.faces
-            lines.append(f"Face      : {len(faces)} detected (best {faces[0].confidence:.2f})")
+            lines.append(f"Face      : detected (confidence {faces[0].confidence:.2f})")
         elif result.face_present is False:
             lines.append("Face      : none detected")
         if result.mouth_movement is not None:

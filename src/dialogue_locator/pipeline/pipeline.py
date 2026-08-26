@@ -55,7 +55,7 @@ from typing import Any
 
 import numpy as np
 
-from dialogue_locator.config import Settings
+from dialogue_locator.config import UNLIMITED_OCCURRENCES, Settings
 from dialogue_locator.exceptions import (
     DialogueLocatorError,
     FaceDetectionError,
@@ -81,7 +81,7 @@ from dialogue_locator.models import (
     VideoInfo,
     format_timestamp,
 )
-from dialogue_locator.transcription.base import Transcriber, load_pcm
+from dialogue_locator.transcription.base import Transcriber, load_pcm, pcm_duration
 from dialogue_locator.transcription.faster_whisper import FasterWhisperTranscriber
 from dialogue_locator.verification.asr_verifier import AsrVerifier
 from dialogue_locator.verification.base import VerificationContext, Verifier
@@ -92,6 +92,21 @@ logger = logging.getLogger(__name__)
 
 FRAME_FILENAME = "frame"
 RESULT_FILENAME = "result.json"
+
+#: The fields of ``LocalizationResult`` that describe one occurrence, snapshotted
+#: so the first occurrence can be restored when no later one is onscreen.
+_ATTEMPT_FIELDS = (
+    "status",
+    "match",
+    "first_pass",
+    "video",
+    "verifications",
+    "frame",
+    "face_detection",
+    "mouth_movement",
+    "near_misses",
+    "warnings",
+)
 
 
 @dataclass
@@ -202,12 +217,19 @@ class _Run:
     ) -> None:
         self.p = pipeline
         self.req = request
-        self.progress = progress
+        # All progress - the pipeline's own events and those of the components
+        # it passes the callback to - flows through _relay_progress, which
+        # stamps events with the occurrence being evaluated.
+        self._raw_progress = progress
+        self.progress: ProgressCallback | None = None if progress is None else self._relay_progress
         self.should_cancel = should_cancel or (lambda: False)
         self.settings = pipeline.settings
         self.timings: dict[str, float] = {}
         self.warnings: list[str] = []
         self.transcribed_seconds = 0.0  # how far into the audio the search got
+        self.attempt = 0  # which occurrence is being evaluated (0-based)
+        self.max_attempts = self.settings.matching.max_occurrences
+        self.unlimited_occurrences = self.max_attempts == UNLIMITED_OCCURRENCES
         self.stage = PipelineStage.INPUT
         self.work_dir = self.settings.storage.work_dir / request.source_key
         self.output_dir = self.settings.storage.output_dir / request.job_id
@@ -244,14 +266,107 @@ class _Run:
         return result
 
     def _execute(self) -> LocalizationResult:
-        """One stage per line; each ``_stage_*`` method owns its timing and events."""
+        """One stage per line; each ``_stage_*`` method owns its timing and events.
+
+        With ``matching.max_occurrences`` above 1, an occurrence judged
+        NOT_ONSCREEN does not end the job: the search resumes just past it and
+        the next occurrence is evaluated the same way. The first occurrence
+        actually delivered on camera wins; when none are, the *first*
+        occurrence is reported with its original verdict, which is exactly the
+        single-occurrence behaviour.
+        """
         matcher = self._stage_input()
         media = self._stage_download(self.req.source)
         audio, samples = self._stage_audio(media)
-        match, matcher = self._stage_search(samples, matcher)
 
-        result = LocalizationResult(
-            status=ResultStatus.FOUND if match else ResultStatus.NOT_FOUND,
+        fallback: dict[str, Any] | None = None
+        result: LocalizationResult | None = None
+        offset = 0.0
+
+        attempt = 0
+        while self._attempt_allowed(attempt):
+            self.attempt = attempt
+            if attempt and not self._tail_is_searchable(samples, offset):
+                break
+            # Warnings describe one occurrence; a rejected attempt's warnings
+            # live on in its snapshot, never on a later occurrence's record.
+            self.warnings = []
+            if attempt:
+                matcher = StreamingMatcher(self.req.dialogue, self.settings.matching)
+            match, matcher = self._stage_search(samples, matcher, offset)
+
+            if match is None:
+                if fallback is None:
+                    return self._not_found_result(matcher)  # never matched at all
+                break  # no further occurrence in the remaining audio
+            if match.start < offset:
+                # The scan must only move forward; anything else would loop on
+                # the occurrence just rejected.
+                logger.warning(
+                    "Scan returned a match at %s, before the resume point %s; stopping",
+                    format_timestamp(match.start),
+                    format_timestamp(offset),
+                )
+                break
+
+            result = self._new_result(match, matcher)
+            self._emit(
+                PipelineStage.MATCHING,
+                f"Match at {match.timestamp} (score {match.score:.1f})",
+                1.0,
+                {"timestamp": match.timestamp, "score": match.score},
+            )
+            self._check_cancel()
+            self._stage_verification(result, samples, audio)
+            self._check_cancel()
+            try:
+                self._evaluate_visuals(result, media)
+            except PipelineCancelledError:
+                raise
+            except DialogueLocatorError as exc:
+                if fallback is None:
+                    raise  # first occurrence: fail the job, as a single-occurrence run would
+                fallback["warnings"].append(
+                    f"A later occurrence at {match.timestamp} could not be checked: {exc.message}"
+                )
+                break
+
+            if result.status is not ResultStatus.NOT_ONSCREEN:
+                return result
+            if fallback is None:
+                if self.max_attempts == 1:
+                    return result  # single-occurrence behaviour: report as judged
+                fallback = self._snapshot(result)  # the earliest occurrence, kept for the fallback
+            if not self._attempt_allowed(attempt + 1):
+                break  # budget spent with nothing onscreen: report the first occurrence
+            if result.match.end <= offset:
+                # The resume point must strictly advance, or an unlimited run
+                # would re-judge the same window forever.
+                logger.warning(
+                    "Occurrence at %s does not advance past %s; stopping",
+                    result.match.timestamp,
+                    format_timestamp(offset),
+                )
+                break
+            self._emit(
+                PipelineStage.MATCHING,
+                f"Occurrence {attempt + 1} at {match.timestamp} is not onscreen - "
+                "searching for the next one",
+                1.0,
+                {"rejected_at": match.timestamp, "reason": result.status.value},
+            )
+            offset = result.match.end
+            attempt += 1
+
+        return self._restore_fallback(result, fallback)
+
+    # ------------------------------------------------------------------ #
+    # Occurrence-loop helpers
+    # ------------------------------------------------------------------ #
+    def _new_result(self, match: MatchCandidate, matcher: StreamingMatcher) -> LocalizationResult:
+        """A fresh result record for one occurrence."""
+        return LocalizationResult(
+            status=ResultStatus.FOUND,
             dialogue=matcher.target.raw,
             source_url=self.req.source,
             video=None,  # full-quality video is fetched only after a match
@@ -262,25 +377,30 @@ class _Run:
             stage_timings=self.timings,
             transcribed_seconds=self.transcribed_seconds,
         )
-        if match is None:
-            self._emit(
-                PipelineStage.MATCHING,
-                f"Dialogue not found (best score {matcher.best_score:.1f})",
-                1.0,
-                {"best_score": matcher.best_score, "near_misses": len(matcher.near_misses)},
-            )
-            return result
+
+    def _not_found_result(self, matcher: StreamingMatcher) -> LocalizationResult:
+        result = LocalizationResult(
+            status=ResultStatus.NOT_FOUND,
+            dialogue=matcher.target.raw,
+            source_url=self.req.source,
+            video=None,
+            first_pass=None,
+            match=None,
+            near_misses=matcher.near_misses,
+            warnings=self.warnings,
+            stage_timings=self.timings,
+            transcribed_seconds=self.transcribed_seconds,
+        )
         self._emit(
             PipelineStage.MATCHING,
-            f"Match at {match.timestamp} (score {match.score:.1f})",
+            f"Dialogue not found (best score {matcher.best_score:.1f})",
             1.0,
-            {"timestamp": match.timestamp, "score": match.score},
+            {"best_score": matcher.best_score, "near_misses": len(matcher.near_misses)},
         )
-        self._check_cancel()
+        return result
 
-        self._stage_verification(result, samples, audio)
-        self._check_cancel()
-
+    def _evaluate_visuals(self, result: LocalizationResult, media: MediaInfo) -> None:
+        """Clip download, frame, and the V2/V3 checks for ``result.match``."""
         # A local audio-only source can be searched but has no frames to offer;
         # a URL always gets the clip (its search media may be audio-only even
         # though the source has video).
@@ -292,7 +412,7 @@ class _Run:
             # The visual checks build on each other: no face check, no mouth check.
             if not self.settings.face_detection.enabled:
                 logger.info("Face detection disabled; skipping visual checks")
-                return result
+                return
             self._stage_face_detection(result)
             # V3 runs even when that one frame held no face. A line can open on
             # a title card or a cutaway and cut to the speaker a frame later;
@@ -311,7 +431,67 @@ class _Run:
             warning = "Source has no video stream; returning the timestamp without a frame."
             self.warnings.append(warning)
             logger.warning(warning)
+
+    def _snapshot(self, result: LocalizationResult) -> dict[str, Any]:
+        """The per-occurrence fields of ``result``, kept for the fallback."""
+        snap = {f: getattr(result, f) for f in _ATTEMPT_FIELDS}
+        snap["warnings"] = list(result.warnings)  # the live list is replaced per attempt
+        return snap
+
+    def _restore_fallback(
+        self, result: LocalizationResult | None, snapshot: dict[str, Any] | None
+    ) -> LocalizationResult:
+        """No occurrence was onscreen: report the first one, as a single-occurrence run would."""
+        assert result is not None and snapshot is not None
+        for field_name, value in snapshot.items():
+            setattr(result, field_name, value)
+        self.warnings = result.warnings
+        self._reextract_reported_frame(result)
+        logger.info(
+            "No occurrence was onscreen; reporting the first at %s", result.match.timestamp
+        )
         return result
+
+    def _reextract_reported_frame(self, result: LocalizationResult) -> None:
+        """Later attempts overwrote frame.jpg; put the reported occurrence's frame back.
+
+        Re-extracted at ``result.frame.timestamp``, not ``match.start``: V3 may
+        have moved the reported frame, and those two are then different images.
+        The clip is still cached in the work dir (cleanup runs only after the
+        whole job), so this costs one seek, not a download.
+        """
+        if result.video is None or result.frame is None:
+            return
+        try:
+            result.frame = self.p.frame_extractor.extract(
+                result.video, result.frame.timestamp, self.output_dir / FRAME_FILENAME
+            )
+        except FrameExtractionError as exc:
+            warning = f"The reported frame could not be rewritten: {exc.message}"
+            self.warnings.append(warning)
+            logger.warning(warning)
+
+    def _attempt_allowed(self, attempt: int) -> bool:
+        """Is there budget for a (0-based) attempt number?
+
+        With ``max_occurrences = UNLIMITED_OCCURRENCES`` there is no budget at
+        all: the loop instead ends when the scan finds no further occurrence or
+        the remaining audio is too short to hold one, both of which are
+        guaranteed because the resume point strictly advances every round.
+        """
+        return self.unlimited_occurrences or attempt < self.max_attempts
+
+    def _tail_is_searchable(self, samples: np.ndarray, offset: float) -> bool:
+        """Is there enough audio after ``offset`` to hold another occurrence?"""
+        remaining = pcm_duration(samples, self.settings.audio.sample_rate) - offset
+        if remaining >= self.settings.matching.min_tail_seconds:
+            return True
+        logger.info(
+            "Only %.2fs of audio left after %s; not looking for further occurrences",
+            remaining,
+            format_timestamp(offset),
+        )
+        return False
 
     # ------------------------------------------------------------------ #
     # Stages (in pipeline order)
@@ -347,13 +527,29 @@ class _Run:
         return audio, samples
 
     def _stage_search(
-        self, samples: np.ndarray, matcher: StreamingMatcher
+        self, samples: np.ndarray, matcher: StreamingMatcher, start_offset: float = 0.0
     ) -> tuple[MatchCandidate | None, StreamingMatcher]:
-        """Stream the fast transcriber through the matcher; VAD-off retry on a miss."""
+        """Stream the fast transcriber through the matcher; VAD-off retry on a miss.
+
+        ``start_offset`` resumes the search past an occurrence already judged
+        (``matching.max_occurrences``). The slice is taken once, here, before
+        either scan, so the VAD-off retry below searches exactly the same audio
+        with the same timestamp offset as the first pass - there is no code
+        path where the two passes see different audio.
+        """
+        if start_offset > 0.0:
+            # Local view only: the caller keeps the full track, because the
+            # verifier slices it by absolute time.
+            samples = samples[int(start_offset * self.settings.audio.sample_rate) :]
         self._begin(PipelineStage.TRANSCRIPTION, "Loading speech model")
         self.p.fast_transcriber.warm_up()
-        self._emit(PipelineStage.TRANSCRIPTION, "Listening for the dialogue", 0.0, {})
-        match, last_word_end = self._scan(self.p.fast_transcriber, samples, matcher)
+        listening = (
+            "Listening for the dialogue"
+            if start_offset == 0.0
+            else f"Listening for the next occurrence from {format_timestamp(start_offset)}"
+        )
+        self._emit(PipelineStage.TRANSCRIPTION, listening, 0.0, {})
+        match, last_word_end = self._scan(self.p.fast_transcriber, samples, matcher, start_offset)
         if match is None and self.p.retry_transcriber is not None:
             # The VAD can discard real speech buried under loud music/effects, so a
             # clean miss is re-checked once with the VAD off (decision #24) before
@@ -369,7 +565,9 @@ class _Run:
                 {"best_score": matcher.best_score},
             )
             retry_matcher = StreamingMatcher(self.req.dialogue, self.settings.matching)
-            match, retry_end = self._scan(self.p.retry_transcriber, samples, retry_matcher)
+            match, retry_end = self._scan(
+                self.p.retry_transcriber, samples, retry_matcher, start_offset
+            )
             last_word_end = max(last_word_end, retry_end)
             if match is not None:
                 self.warnings.append(
@@ -380,7 +578,8 @@ class _Run:
                 matcher = retry_matcher  # report near misses from the better pass
         self._end(PipelineStage.TRANSCRIPTION)
         self.timings[PipelineStage.MATCHING.value] = 0.0  # folded into transcription
-        self.transcribed_seconds = last_word_end
+        # Furthest point the search has reached across all attempts.
+        self.transcribed_seconds = max(self.transcribed_seconds, last_word_end)
         return match, matcher
 
     def _stage_verification(
@@ -692,16 +891,22 @@ class _Run:
 
     # ------------------------------------------------------------------ #
     def _scan(
-        self, transcriber: Transcriber, samples: np.ndarray, matcher: StreamingMatcher
+        self,
+        transcriber: Transcriber,
+        samples: np.ndarray,
+        matcher: StreamingMatcher,
+        offset: float = 0.0,
     ) -> tuple[MatchCandidate | None, float]:
         """Stream ``transcriber`` over ``samples`` through ``matcher``.
 
         Returns the first match (or ``None``) and the end time of the last word
         pulled from the stream; the stream is closed as soon as a match settles.
+        ``offset`` is added to every word timestamp, so a scan over a tail slice
+        of the track still yields absolute video times.
         """
         match: MatchCandidate | None = None
-        last_word_end = 0.0
-        stream = transcriber.transcribe(samples, offset=0.0, progress=self.progress)
+        last_word_end = offset
+        stream = transcriber.transcribe(samples, offset=offset, progress=self.progress)
         try:
             for word in stream:
                 last_word_end = word.end
@@ -724,8 +929,17 @@ class _Run:
         self._emit(stage, message, 0.0, {})
 
     def _end(self, stage: PipelineStage) -> None:
-        self.timings[stage.value] = time.perf_counter() - self._stage_t0
-        logger.info("---- [%s] done in %.2fs", stage.value, self.timings[stage.value])
+        elapsed = time.perf_counter() - self._stage_t0
+        # Stages can run once per occurrence when the search resumes past a
+        # rejected match, so timings accumulate the work actually done rather
+        # than keeping only the last attempt's number.
+        self.timings[stage.value] = self.timings.get(stage.value, 0.0) + elapsed
+        logger.info(
+            "---- [%s] done in %.2fs (stage total %.2fs)",
+            stage.value,
+            elapsed,
+            self.timings[stage.value],
+        )
 
     def _retag(self, stage: PipelineStage) -> ProgressCallback | None:
         """Progress callback that re-labels events with ``stage``.
@@ -737,9 +951,25 @@ class _Run:
             return None
 
         def relay(event: ProgressEvent) -> None:
-            self.progress(ProgressEvent(stage, event.message, event.fraction, event.details))
+            # Through _emit so relabelled events carry the attempt number too.
+            self._emit(stage, event.message, event.fraction, event.details)
 
         return relay
+
+    def _relay_progress(self, event: ProgressEvent) -> None:
+        """Every progress event - the pipeline's own and the sub-components' -
+        passes through here. With more than one occurrence allowed, each event
+        is stamped with the attempt it belongs to, so the UI can explain the
+        stepper rewinding instead of silently returning to transcription.
+        Single-occurrence runs emit exactly the events they always did."""
+        if self.unlimited_occurrences or self.max_attempts > 1:
+            details = dict(event.details)
+            details["attempt"] = self.attempt + 1
+            # Omitted when unlimited: there is no "of N" to count towards.
+            if not self.unlimited_occurrences:
+                details["max_attempts"] = self.max_attempts
+            event = ProgressEvent(event.stage, event.message, event.fraction, details)
+        self._raw_progress(event)
 
     def _emit(self, stage: PipelineStage, message: str, fraction: float | None, details: dict[str, Any]) -> None:
         if self.progress is not None:

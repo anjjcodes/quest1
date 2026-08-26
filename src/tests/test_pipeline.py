@@ -810,3 +810,277 @@ def test_warm_up_loads_fast_and_verifier_models(settings, sample_video):
                          verifiers=[AsrVerifier(big, MatchingConfig(), VerificationConfig())])
     p.warm_up()
     assert fast.warmed == 1 and big.warmed == 1
+
+
+# --------------------------------------------------------------------------- #
+# multiple occurrences (matching.max_occurrences)
+# --------------------------------------------------------------------------- #
+class OffsetRecordingTranscriber(ScriptedTranscriber):
+    """ScriptedTranscriber that also records each call's offset and sample count."""
+
+    def __init__(self, text: str, step: float = 0.1):
+        super().__init__(text, step)
+        self.offsets: list[float] = []
+        self.sample_counts: list[int] = []
+
+    def transcribe(self, audio, *, offset=0.0, progress=None) -> Iterator[Word]:
+        self.offsets.append(offset)
+        self.sample_counts.append(len(audio))
+        yield from super().transcribe(audio, offset=offset, progress=progress)
+
+
+class SequencedMouthAnalyzer(FakeMouthAnalyzer):
+    """One scripted mouth result per analyze() call, clamped to the last."""
+
+    def __init__(self, results: list[MouthMovementResult]):
+        super().__init__(results[0])
+        self.results = results
+
+    def analyze(self, video: VideoInfo, start: float, end: float) -> MouthMovementResult:
+        self.result = self.results[min(len(self.calls), len(self.results) - 1)]
+        return super().analyze(video, start, end)
+
+
+def occurrences_settings(settings: Settings, max_occurrences: int) -> Settings:
+    matching = settings.matching.model_copy(update={"max_occurrences": max_occurrences})
+    return settings.model_copy(update={"matching": matching})
+
+
+def test_single_occurrence_default_is_unchanged(settings, sample_video):
+    """max_occurrences=1 + not onscreen: judged and reported, exactly as before."""
+    frames = CountingFrameExtractor(settings)
+    p, tr = make_pipeline(settings, sample_video, TRANSCRIPT,
+                          mouth_analyzer=FakeMouthAnalyzer(mouth_result(moving=False)))
+    p.frame_extractor = frames
+    result = p.run(PipelineRequest(source="https://example.com/v", dialogue=DIALOGUE, job_id="o1"))
+    assert result.status is ResultStatus.NOT_ONSCREEN
+    assert result.match.start == pytest.approx(0.6)
+    assert frames.extract_calls == 1  # no fallback restore, no re-extract
+    assert tr.pulled < len(TRANSCRIPT.split())  # early stop still in force
+
+
+def test_second_occurrence_onscreen_wins(settings, sample_video):
+    """First occurrence rejected (mouth still), the search resumes and the second wins."""
+    s = occurrences_settings(settings, 3)
+    tr = OffsetRecordingTranscriber(TRANSCRIPT)
+    mouth = SequencedMouthAnalyzer([mouth_result(moving=False), mouth_result(moving=True)])
+    dl = FakeDownloader(sample_video)
+    p = DialoguePipeline(s, downloader=dl, fast_transcriber=tr, verifiers=[],
+                         face_detector=FakeFaceDetector(), mouth_analyzer=mouth)
+    events: list[ProgressEvent] = []
+    result = p.run(PipelineRequest(source="https://example.com/v", dialogue=DIALOGUE, job_id="o2"),
+                   progress=events.append)
+
+    assert result.status is ResultStatus.FOUND
+    # ScriptedTranscriber replays the transcript from the resume offset, so the
+    # "second occurrence" sits one first-match-end later: 1.08 + 0.6.
+    assert result.match.start == pytest.approx(1.68)
+    assert len(mouth.calls) == 2 and dl.video_calls == 2
+    # the resumed scan started exactly at the rejected occurrence's end
+    assert tr.offsets == [pytest.approx(0.0), pytest.approx(1.08)]
+    assert tr.sample_counts[1] < tr.sample_counts[0]  # a tail slice, not the whole track
+    # the rejection was announced, tagged with the occurrence it belongs to
+    rejected = [e for e in events if "not onscreen - searching" in e.message]
+    assert len(rejected) == 1 and rejected[0].details["attempt"] == 1
+    assert all(e.details.get("max_attempts") == 3 for e in events if e.details)
+
+
+def test_falls_back_to_first_when_none_onscreen(settings, sample_video, tmp_path):
+    """Every occurrence rejected: the first is reported, and its frame is re-extracted."""
+    s = occurrences_settings(settings, 2)
+    mouth = SequencedMouthAnalyzer([mouth_result(moving=False)])
+    p, _ = make_pipeline(s, sample_video, TRANSCRIPT, mouth_analyzer=mouth)
+    result = p.run(PipelineRequest(source="https://example.com/v", dialogue=DIALOGUE, job_id="o3"))
+
+    assert result.status is ResultStatus.NOT_ONSCREEN
+    assert result.match.start == pytest.approx(0.6)  # the first occurrence, not the second
+    assert len(mouth.calls) == 2  # both were evaluated
+    # the reported frame describes the first occurrence and exists on disk
+    assert result.frame.frame_number == 15  # floor(0.6 * 25)
+    assert result.frame.image_path.is_file()
+    assert result.transcribed_seconds > 1.08  # the search really did go past the first
+
+
+def test_warnings_do_not_leak_between_occurrences(settings, sample_video):
+    """A rejected occurrence's verification warning stays out of the winner's record."""
+    s = occurrences_settings(settings, 2)
+    verifier = ScriptedVerifier(VerificationStatus.REJECTED, score=60.0)
+    mouth = SequencedMouthAnalyzer([mouth_result(moving=False), mouth_result(moving=True)])
+    p, _ = make_pipeline(s, sample_video, TRANSCRIPT, verifiers=[verifier], mouth_analyzer=mouth)
+    result = p.run(PipelineRequest(source="https://example.com/v", dialogue=DIALOGUE, job_id="o4"))
+
+    assert result.status is ResultStatus.FOUND
+    # both occurrences were verified and rejected, but only the winner's warning is reported
+    assert len(verifier.seen) == 2
+    assert len([w for w in result.warnings if "scripted" in w]) == 1
+
+
+def test_no_further_occurrence_falls_back(settings, sample_video):
+    """The tail holds no second occurrence: report the first, as a single run would."""
+    s = occurrences_settings(settings, 3)
+    # 11 words = 1.1 s of speech; the resumed scan replays it at 1.08 s, ending
+    # at ~2.2 s of the 3 s track, and the second replay is cut off by the tail
+    # guard - so the second scan simply never matches again.
+    transcript = "one two three four five My mind rebels at stagnation tail"
+    mouth = SequencedMouthAnalyzer([mouth_result(moving=False)])
+    tr = OffsetRecordingTranscriber(transcript)
+    p = DialoguePipeline(s, downloader=FakeDownloader(sample_video), fast_transcriber=tr,
+                         verifiers=[], face_detector=FakeFaceDetector(), mouth_analyzer=mouth)
+    req = PipelineRequest(
+        source="https://example.com/v", dialogue="rebels at stagnation tail then more", job_id="o5"
+    )
+    result = p.run(req)
+    # only the first occurrence exists; the loop must settle on it
+    assert result.status is ResultStatus.NOT_ONSCREEN
+    assert len(mouth.calls) >= 1
+    assert result.match is not None
+
+
+def test_visual_error_on_later_attempt_falls_back(settings, sample_video):
+    """A clip download failing on attempt 2 must not fail a job attempt 1 completed."""
+    s = occurrences_settings(settings, 2)
+
+    class FlakyDownloader(FakeDownloader):
+        def fetch_video_clip(self, source, start, end, dest, progress=None, reuse_existing=True):
+            if self.video_calls >= 1:
+                self.video_calls += 1
+                raise DownloadError("host went away")
+            return super().fetch_video_clip(source, start, end, dest, progress, reuse_existing)
+
+    mouth = SequencedMouthAnalyzer([mouth_result(moving=False)])
+    p, _ = make_pipeline(s, sample_video, TRANSCRIPT, downloader=FlakyDownloader(sample_video),
+                         mouth_analyzer=mouth)
+    result = p.run(PipelineRequest(source="https://example.com/v", dialogue=DIALOGUE, job_id="o6"))
+
+    assert result.status is ResultStatus.NOT_ONSCREEN
+    assert result.match.start == pytest.approx(0.6)  # the first occurrence
+    assert any("could not be checked" in w for w in result.warnings)
+
+
+def test_visual_error_on_first_attempt_still_raises(settings, sample_video):
+    """Attempt 1 failing keeps today's semantics: the job fails with the stage."""
+    s = occurrences_settings(settings, 3)
+    dl = FakeDownloader(sample_video)
+    p, _ = make_pipeline(s, sample_video, TRANSCRIPT, downloader=dl)
+
+    def boom(source, start, end, dest_dir, progress=None, reuse_existing=True):
+        raise DownloadError("no clip for you")
+
+    dl.fetch_video_clip = boom
+    with expect_error(DownloadError):
+        p.run(PipelineRequest(source="https://example.com/v", dialogue=DIALOGUE, job_id="o7"))
+
+
+def test_vad_retry_resumes_from_the_same_offset(settings, sample_video):
+    """The VAD-off retry searches the same tail as the pass it retries."""
+    s = occurrences_settings(settings, 2)
+
+    class PerCallTranscriber(OffsetRecordingTranscriber):
+        """A different scripted text per transcribe() call, clamped to the last."""
+
+        def __init__(self, texts: list[str]):
+            super().__init__(texts[0])
+            self.texts = texts
+
+        def transcribe(self, audio, *, offset=0.0, progress=None) -> Iterator[Word]:
+            self.text = self.texts[min(len(self.offsets), len(self.texts) - 1)]
+            yield from super().transcribe(audio, offset=offset, progress=progress)
+
+    # the dialogue exists once; attempt 2's main scan misses, so its VAD-off
+    # retry runs - over the resumed tail, not from the start of the track
+    main = PerCallTranscriber([TRANSCRIPT, "no dialogue in this tail at all"])
+    retry = OffsetRecordingTranscriber("still nothing matching here")
+    mouth = SequencedMouthAnalyzer([mouth_result(moving=False)])
+    p = DialoguePipeline(s, downloader=FakeDownloader(sample_video), fast_transcriber=main,
+                         retry_transcriber=retry, verifiers=[],
+                         face_detector=FakeFaceDetector(), mouth_analyzer=mouth)
+    result = p.run(PipelineRequest(source="https://example.com/v", dialogue=DIALOGUE, job_id="o8"))
+
+    # attempt 2's main scan and its VAD-off retry saw the same offset and audio
+    assert main.offsets[1] == pytest.approx(1.08)
+    assert retry.offsets == [pytest.approx(1.08)]
+    assert retry.sample_counts == [main.sample_counts[1]]
+    # and with no second occurrence anywhere, the first is what gets reported
+    assert result.status is ResultStatus.NOT_ONSCREEN
+    assert result.match.start == pytest.approx(0.6)
+
+
+def test_stage_timings_accumulate_across_attempts(settings, sample_video):
+    s = occurrences_settings(settings, 2)
+    mouth = SequencedMouthAnalyzer([mouth_result(moving=False), mouth_result(moving=True)])
+    p, _ = make_pipeline(s, sample_video, TRANSCRIPT, mouth_analyzer=mouth)
+    result = p.run(PipelineRequest(source="https://example.com/v", dialogue=DIALOGUE, job_id="o9"))
+    assert result.status is ResultStatus.FOUND
+    # both attempts' stage work is present (a single run of this fixture takes
+    # well under a second per stage; the assertion is about presence, not size)
+    for stage in ("transcription", "download_video", "frame", "mouth_movement"):
+        assert stage in result.stage_timings
+
+
+def test_progress_events_untagged_for_single_occurrence_runs(settings, sample_video):
+    p, _ = make_pipeline(settings, sample_video, TRANSCRIPT)
+    events: list[ProgressEvent] = []
+    p.run(PipelineRequest(source="https://example.com/v", dialogue=DIALOGUE, job_id="o10"),
+          progress=events.append)
+    assert all("attempt" not in e.details for e in events)
+
+
+class CountingFrameExtractor:
+    """Real extraction, counted - so a test can assert how often frames were cut."""
+
+    def __init__(self, settings: Settings):
+        from dialogue_locator.media.frames import FrameExtractor
+
+        self._real = FrameExtractor(settings.frame, settings.audio.ffmpeg_binary,
+                                    settings.audio.ffprobe_binary)
+        self.extract_calls = 0
+
+    def extract(self, video, timestamp, dest_path):
+        self.extract_calls += 1
+        return self._real.extract(video, timestamp, dest_path)
+
+    def read_frame(self, video, frame_number, fps=None):
+        return self._real.read_frame(video, frame_number, fps)
+
+
+def test_unlimited_occurrences_runs_until_the_audio_ends(settings, sample_video):
+    """max_occurrences=-1 keeps going with no budget, and still terminates."""
+    s = occurrences_settings(settings, -1)
+    mouth = SequencedMouthAnalyzer([mouth_result(moving=False)])  # nothing is ever onscreen
+    tr = OffsetRecordingTranscriber(TRANSCRIPT)
+    p = DialoguePipeline(s, downloader=FakeDownloader(sample_video), fast_transcriber=tr,
+                         verifiers=[], face_detector=FakeFaceDetector(), mouth_analyzer=mouth)
+    events: list[ProgressEvent] = []
+    result = p.run(PipelineRequest(source="https://example.com/v", dialogue=DIALOGUE, job_id="u1"),
+                   progress=events.append)
+
+    # No budget stopped it: it kept evaluating until the remaining audio was
+    # shorter than min_tail_seconds (the 3 s fixture allows two rounds), then
+    # fell back to the first occurrence as usual.
+    assert len(mouth.calls) >= 2
+    # the next resume point (the last judged window's end) left too little audio
+    remaining = 3.0 - mouth.calls[-1][2]
+    assert remaining < s.matching.min_tail_seconds  # the tail guard, not a budget
+    assert result.status is ResultStatus.NOT_ONSCREEN
+    assert result.match.start == pytest.approx(0.6)
+    # every scan moved forward
+    assert tr.offsets == sorted(tr.offsets) and len(set(tr.offsets)) == len(tr.offsets)
+    # unlimited runs report the attempt but have no "of N" to count towards
+    tagged = [e for e in events if e.details.get("attempt")]
+    assert tagged and all("max_attempts" not in e.details for e in tagged)
+
+
+def test_unlimited_occurrences_stops_at_the_first_onscreen_one(settings, sample_video):
+    s = occurrences_settings(settings, -1)
+    mouth = SequencedMouthAnalyzer([mouth_result(moving=False), mouth_result(moving=True)])
+    p, _ = make_pipeline(s, sample_video, TRANSCRIPT, mouth_analyzer=mouth)
+    result = p.run(PipelineRequest(source="https://example.com/v", dialogue=DIALOGUE, job_id="u2"))
+    assert result.status is ResultStatus.FOUND
+    assert len(mouth.calls) == 2  # stopped as soon as one was onscreen
+
+
+def test_zero_occurrences_is_rejected(settings):
+    import pydantic
+
+    with pytest.raises(pydantic.ValidationError, match="max_occurrences"):
+        settings.matching.__class__(max_occurrences=0)

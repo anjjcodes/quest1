@@ -117,6 +117,7 @@ class Sample:
     shot: int  # bumped whenever the face box jumps; see _is_shot_change
     openness: float
 
+
 # FaceMesh landmark indices (see MediaPipe's canonical face model).
 _UPPER_LIP_INNER = 13
 _LOWER_LIP_INNER = 14
@@ -210,6 +211,12 @@ class MouthMovementAnalyzer:
         face frames from one shot. With no scorable window the score falls back
         to the spread of whatever was seen (informational only) and the verdict
         stays indeterminate.
+
+        The window is counted in *samples*, so a run with bridged gaps can span
+        slightly more wall-clock than ``score_window_seconds``. Measured over the
+        cached corpus the worst case is a 5-sample window spanning 0.38 s - still
+        inside the nominal 0.5 s - because bridging only ever fires on runs that
+        are short to begin with.
         """
         if not samples:
             return None, None, None

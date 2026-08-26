@@ -79,6 +79,7 @@ def settings_to_view(s: Settings) -> SettingsView:
             mouth_movement=s.mouth_movement.enabled,
         ),
         match_threshold=s.matching.match_threshold,
+        max_occurrences=s.matching.max_occurrences,
         face_min_confidence=s.face_detection.min_detection_confidence,
         mouth_movement_threshold=s.mouth_movement.movement_threshold,
         mouth_min_face_frames=s.mouth_movement.min_face_frames,
@@ -104,7 +105,10 @@ def apply_setting_overrides(
         update={
             "verification": defaults.verification.model_copy(update={"enabled": verification}),
             "matching": defaults.matching.model_copy(
-                update={"match_threshold": view.match_threshold}
+                update={
+                    "match_threshold": view.match_threshold,
+                    "max_occurrences": view.max_occurrences,
+                }
             ),
             "face_detection": defaults.face_detection.model_copy(
                 update={"enabled": face, "min_detection_confidence": view.face_min_confidence}

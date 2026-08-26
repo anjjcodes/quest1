@@ -23,6 +23,11 @@ from pydantic import BaseModel, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
+#: ``matching.max_occurrences`` value meaning "evaluate every occurrence in the
+#: video, however many there turn out to be".
+UNLIMITED_OCCURRENCES = -1
+
+
 class DownloadConfig(BaseModel):
     """Settings for fetching the source media (yt-dlp).
 
@@ -179,6 +184,36 @@ class MatchingConfig(BaseModel):
         ge=1,
         description="How many best-scoring windows to report when nothing crosses the "
         "threshold.",
+    )
+    max_occurrences: int = Field(
+        1,
+        description="How many occurrences of the dialogue to evaluate before settling. "
+        "1 keeps the V1 behaviour: the first audible occurrence is judged and reported "
+        "whatever the visual verdict. Higher values keep scanning past an occurrence "
+        "that came back not_onscreen and report the first one actually delivered on "
+        "camera, falling back to the first occurrence when none are. -1 means no limit: "
+        "keep going until the audio runs out, for a video whose repeat count is not "
+        "known up front. Costs one clip download and one visual pass per rejected "
+        "occurrence, and forfeits the early stop - a line that is never onscreen "
+        "transcribes the whole track.",
+    )
+
+    @field_validator("max_occurrences")
+    @classmethod
+    def _check_occurrences(cls, value: int) -> int:
+        if value == UNLIMITED_OCCURRENCES or value >= 1:
+            return value
+        raise ValueError(
+            f"max_occurrences must be >= 1, or {UNLIMITED_OCCURRENCES} for no limit "
+            f"(got {value})"
+        )
+    min_tail_seconds: float = Field(
+        1.0,
+        gt=0,
+        description="Stop looking for further occurrences when less than this much "
+        "audio remains after the previous one: a fragment that short cannot hold a "
+        "dialogue, and an empty slice makes the decoder raise rather than return "
+        "nothing.",
     )
 
 

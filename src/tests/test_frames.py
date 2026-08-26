@@ -80,7 +80,6 @@ def test_different_timestamps_give_different_frames(sample_video: Path, tmp_path
 def test_opencv_and_ffmpeg_paths_agree(sample_video: Path):
     """Seek accuracy: both decoders must return (nearly) the same pixels for the same frame."""
     ex = FrameExtractor(FrameConfig())
-    v = _video(sample_video)
     n = 50
     via_cv = ex._read_with_opencv(sample_video, n)
     via_ff = ex._read_with_ffmpeg(sample_video, frame_to_timestamp(n, 25.0))

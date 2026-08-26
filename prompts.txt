@@ -1,6 +1,10 @@
 PROMPTS USED TO BUILD THIS PROJECT
 ===================================
 
+I used Claude for the coding and ChatGPT to tighten the wording of these prompts
+before sending them.
+
+
 Prompt 0:
 
 Think of yourself as a senior Python developer and software architect. Write clean, modular,
@@ -238,3 +242,43 @@ Full face shown + mouth moving → on-screen
 Full face shown + mouth NOT moving (narration/voiceover/dubbed) → off-screen
 Face shown first with mouth movement, then camera cuts away for rest of dialogue → on-screen
 Dialogue starts off-camera, camera returns to speaker mid-dialogue (with mouth movement visible once shown) → on-screen
+
+Prompt 26:  [screenshot of the result panel: "face detected" but "no mouth movement", for
+"my name is peter parker"; the same line with "hi" in front reported no face at all]
+this is the only problem now, my name is peter parker has face but no mouth movement and its
+correct but when hi is included its showing no face no mouth movement
+
+Prompt 27:  [https://www.youtube.com/watch?v=MqE5ZIU3Ao0 - a fan-made trailer; the matched frame
+is a shot of falling rubble with nobody in it]
+there was no face, no mouth in this part, and still detected
+
+Prompt 28:  [screenshot of the FRIENDS bookshelf scene - three people in a wide shot, the speaker
+in a red shirt roughly 2.5% of the frame width]
+the red shirt guy is saying the dialogue i gave, and it is saying its off screen dialogue. why
+
+Prompt 29:  [after the wide-shot diagnosis showed the fix needed tiled detection plus per-face
+tracking - deciding to stop adding features and consolidate instead]
+deadline for this project is 11.59pm today. so i dont think its a right time to do this as time
+limits. we need not overengineer this. lets put this case as future dev case. and work on
+refining and optimizing.
+what do u think?
+
+Prompt 30 : Okay so if there is a dialogue “how are you” and this appears 3 times  in given video and first time face doesn’t exist , 2nd one has face but doesn’t match mouth movement and last at the end it has face and matches mouth movement
+How the application handles it
+
+Prompt 31 :
+should we fix it in code , like is it  complex? how many code changes? optimize and say the minimal changes required
+
+Prompt 32 :
+So in the given implementation, I want to know how it works, in my given three cases, say the flow and dry run it and show how it exactly works.
+
+Prompt 33 :
+Okay, this looks good. Let’s follow this approach, but don’t implement yet.
+
+First, create a clean, detailed implementation plan covering all the proposed changes. Pay particular attention to the VAD-off retry in the second loop and ensure it follows the same floor/threshold and behavior as the VAD-on path.
+
+Also, hook the relevant pipeline events into the frontend, including the attempt number and current stage, so we can clearly see what is happening instead of blindly returning to transcription.
+
+Before implementation, systematically review and logically validate the plan against all possible flows, edge cases, retries, fallback behavior, timing accumulation, and failure scenarios. Only after everything is verified and the plan is internally consistent should you proceed with implementation.
+also give clean, optimized, and maintainable code like the exisiting code base with unit tests
+

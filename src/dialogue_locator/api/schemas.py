@@ -11,7 +11,9 @@ from datetime import datetime
 from enum import Enum
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+from dialogue_locator.config import UNLIMITED_OCCURRENCES
 
 
 class StageToggles(BaseModel):
@@ -38,6 +40,18 @@ class SettingsView(BaseModel):
 
     stages: StageToggles = Field(default_factory=StageToggles)
     match_threshold: float = Field(ge=0, le=100, description="Minimum fuzzy match score (0-100)")
+    max_occurrences: int = Field(
+        description="How many occurrences of the dialogue to evaluate before settling; "
+        "1 reports the first audible occurrence whatever the visual verdict, "
+        "-1 evaluates every occurrence in the video",
+    )
+
+    @field_validator("max_occurrences")
+    @classmethod
+    def _check_occurrences(cls, value: int) -> int:
+        if value == UNLIMITED_OCCURRENCES or value >= 1:
+            return value
+        raise ValueError(f"must be >= 1, or {UNLIMITED_OCCURRENCES} for every occurrence")
     face_min_confidence: float = Field(ge=0, le=1, description="Minimum face detection confidence")
     mouth_movement_threshold: float = Field(
         gt=0, description="Minimum mouth-openness std to count as moving"
