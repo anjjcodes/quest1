@@ -65,29 +65,39 @@ Where to read more:
 
 ## Setup and run
 
-You need Python 3.11 or newer and FFmpeg. Model weights (about 2 GB for Whisper, a few MB for
-MediaPipe) download themselves on first use and are cached.
+You need Python 3.12 (3.11 works too) and FFmpeg. On Apple Silicon you also need
+[uv](https://docs.astral.sh/uv/), because it is the only way the script can fetch a native
+arm64 Python: the Homebrew one under `/usr/local` is x86_64, and `onnxruntime` has no macOS
+x86_64 wheels. `brew install uv` covers it, and `./run_server.sh` tells you if it is missing
+rather than failing halfway through the install.
+
+Model weights download themselves on first use and are cached. The defaults pull about
+600 MB of Whisper weights (`base` 140 MB for the search pass, `small` 460 MB for verification)
+plus a few MB for MediaPipe; only switching `verify_model` to `medium` takes it past 2 GB.
 
 Installing the package (both options below do it) also registers the two commands used on
 this page, `dialogue-locator` and `dialogue-locator-server`. They live inside `.venv`, so they
-are available whenever the venv is active, or directly as `.venv/bin/dialogue-locator`.
+are available whenever the venv is active, or directly as `.venv/bin/dialogue-locator`
+(`.venv\Scripts\dialogue-locator.exe` on Windows).
 
 ### macOS and Linux
 
 ```bash
-brew install ffmpeg          # macOS (Linux: sudo apt install ffmpeg)
+brew install ffmpeg uv       # macOS (Linux: sudo apt install ffmpeg; uv optional there)
 ./run_server.sh
 ```
 
-The script does the rest: it checks ffmpeg and ffprobe, creates `.venv` (on Apple Silicon it
-uses a native arm64 Python, because some wheels do not exist for Rosetta Pythons), installs
-the package, and starts the server at `http://127.0.0.1:8000`.
+The script does the rest: it checks ffmpeg and ffprobe, creates `.venv` (on Apple Silicon a
+native arm64 Python via uv, because some wheels do not exist for Rosetta Pythons), installs
+the package, and starts the server at `http://127.0.0.1:8000`. If it cannot get a native
+interpreter it stops and says so, instead of building a venv that fails later on an
+`onnxruntime` wheel.
 
 ### Windows
 
 ```powershell
 winget install ffmpeg
-py -3.11 -m venv .venv
+py -3.12 -m venv .venv
 .venv\Scripts\activate
 pip install -e ".[dev]"
 dialogue-locator-server

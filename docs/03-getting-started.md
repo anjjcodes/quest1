@@ -7,7 +7,8 @@
 | Python 3.11+ (3.12 recommended) | runtime | `uv python install 3.12` or python.org |
 | **FFmpeg + ffprobe** on `PATH` | audio extraction, probing, frame fallback | `brew install ffmpeg` |
 | `deno` (recommended) | yt-dlp's JavaScript runtime for YouTube challenges | `brew install deno` |
-| ~2 GB disk for model weights | `base` ≈ 140 MB, `small` ≈ 460 MB, `medium` ≈ 1.5 GB, cached in `~/.cache/huggingface` | automatic on first use |
+| **`uv`** (required on Apple Silicon) | the only way to fetch a native arm64 Python; see the note below | `brew install uv` |
+| disk for model weights | **~600 MB for the defaults** (`base` ≈ 140 MB + `small` ≈ 460 MB); ~2 GB if you switch `verify_model` to `medium` (≈ 1.5 GB). Cached in `~/.cache/huggingface` | automatic on first use |
 
 ### Apple Silicon note (important)
 
