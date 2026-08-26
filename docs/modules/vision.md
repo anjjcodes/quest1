@@ -36,8 +36,21 @@ class MouthMovementAnalyzer:
   smoothing), one face per frame (the most prominent).
 * Per-frame signal: **mouth openness** = inner-lip gap (landmarks 13–14) / mouth width
   (61–291) — invariant to face size, camera distance and resolution.
-* Movement score = standard deviation of that series over the window. Measured ~0.09 while
-  speaking vs ~0.001 landmark jitter on a still face; threshold default **0.02** sits between.
+* Movement score = the **detrended** standard deviation over the most active sliding window
+  of `score_window_seconds` (0.5 s), not one number over the whole line. Detrended so a head
+  that merely turns during a reaction shot (openness slides to 0.042 raw, 0.016 detrended) is
+  not read as speech; sliding so a line that is only on camera for its last second still
+  counts. Measured on the cached corpus: present but silent **0.003–0.021**, speaking on
+  camera **0.046–0.123**; threshold default **0.03** sits in the gap.
+* Frames are **not** landmarked whole. The landmarker's own detector only finds large faces,
+  so each frame goes through BlazeFace first and the landmarker sees a padded crop upscaled to
+  `min_crop_size`. The last known box is carried forward for `box_carry_seconds` over frames
+  detection misses, because BlazeFace flickers on small faces (a 290 px face in 1920x1080 was
+  found in 4 of 26 frames; the carry lifted that to 22). Bounded so a cut cannot attribute one
+  shot's face to the previous run.
+* Windows never span a shot change (`shot_change_shift` / `shot_change_scale`) or a gap longer
+  than `max_gap_seconds`: the step between two still faces' resting mouths is not a mouth
+  opening.
 * Verdict is **indeterminate** (`moving=None`, pipeline fails open) when fewer than
   `min_face_frames` frames contain a face — absence of a face is not evidence of a still mouth.
 * Frames are read sequentially after one seek (the clip is only a few seconds long). A fresh

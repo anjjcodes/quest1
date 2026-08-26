@@ -55,9 +55,12 @@ All three are implemented; further visual stages plug in the same way (see
 
 ## Vital statistics
 
-* ~8.5k lines under `src/` including tests; 270+ tests (`pytest`), all offline by default.
+* ~8.5k lines under `src/` including tests; 309 tests (`pytest`), 302 of them offline by
+  default (the rest are opt-in behind a `network` marker or `DL_RUN_MODEL_TESTS=1`).
 * Interfaces: CLI (`dialogue-locator`), HTTP API (`dialogue-locator-server`, FastAPI, OpenAPI at
   `/docs`), single-page web UI at `/`.
-* Measured on an Apple M2 (CPU, int8): streaming pass `base` ≈ 12× realtime, `small` ≈ 3×;
-  verification with the default `small` over the ±12 s window (≈ 26 s of audio) took 15.6 s in
-  the reference run.
+* Measured on an Apple M2 (CPU, int8, 4 performance cores): streaming pass `base` ≈ 60×
+  realtime, `small` ≈ 3×; verification with the default `small` over the ±12 s window
+  (≈ 28 s of audio) takes ≈ 10 s. Thread count dominates these numbers — see
+  `whisper.cpu_threads` in [configuration](04-configuration.md) and decision 7 in
+  `APPROACH.MD`.

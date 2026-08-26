@@ -1,6 +1,6 @@
 # Module: `matching/`
 
-Pure Python, no models, fully unit-tested (25 tests, ~0.2 s). Two files.
+Pure Python, no models, fully unit-tested (43 tests, ~0.2 s). Two files.
 
 ## `normalize.py`
 

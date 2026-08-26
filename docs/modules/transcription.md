@@ -84,8 +84,15 @@ decoding → `TranscriptionError("… while decoding")`, after logging how many 
 | model | realtime factor | notes |
 |---|---|---|
 | tiny | ~40× | rough text |
-| base | ~12× | **streaming default** |
-| small | ~3× | **verification default** (`verify_model`); on the ±12 s window (≈ 26 s of audio) the reference run took 15.6 s |
+| base | ~60× | **streaming default** (greedy; ~40× at beam 5) |
+| small | ~3× | **verification default** (`verify_model`); the ±12 s window (≈ 28 s of audio) takes ≈ 10 s |
 | medium | ~0.6× | optional, slower verification |
 
-Beam size 1 vs 5 made no measurable difference on CPU (ctranslate2 batches the beams).
+These assume `cpu_threads` is sized to the machine's **performance** cores, which is what the
+default of `0` now does. Handing ctranslate2 every core instead costs ~17× on a big.LITTLE CPU
+(M2: 5.4 s vs 90.9 s for the same 331 s scan) — see `performance_cores()` in
+`transcription/faster_whisper.py`.
+
+Beam size 1 vs 5 is worth ~1.4× on the streaming pass (8.1 s vs 11.3 s over 331 s of audio,
+identical output), which is why `fast_beam_size` defaults to 1 while the verify pass keeps
+the full beam.

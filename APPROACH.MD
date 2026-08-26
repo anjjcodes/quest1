@@ -374,10 +374,16 @@ match score 100. This run exercises the whole design end to end: the fast pass h
 rebelled. It's stagnation." and scored 86.7, the verification model retranscribed the window,
 scored 100 on the correct wording and pulled the start back by 0.54 seconds, the frame came
 back with one face at 0.953 confidence, and V3 scored the mouth at 0.074 over 74 frames, all
-of which had a face, then moved the answer frame to the start of the most active window. That
-run took 114 seconds after scanning 5 minutes 30 seconds of audio, 79.9 s of it transcription
-and 27.7 s verification, with the audio already cached. The categorised cases below come from
-eleven more dialogue cases across ten other videos, listed in `test_cases.json`.
+of which had a face, then moved the answer frame to the start of the most active window. It
+scanned 5 minutes 30 seconds of audio to get there.
+
+That run was recorded before the thread fix in decision 7, so its 114 s total is not a number
+I would quote today. Measured on the same cached audio afterwards: the streaming search covers
+those 331 seconds in about 8.5 s and the verification window in about 10 s, with roughly 6 s
+for the clip download, frame extraction and both visual checks. I have not re-run the full
+job end to end since, because ok.ru is not reachable from where I am writing this, so I would
+rather give the measured stage costs than a total I have not seen. The categorised cases below
+come from eleven more dialogue cases across ten other videos, listed in `test_cases.json`.
 
 The kinds of cases I actually ran, and what happened:
 

@@ -4,8 +4,8 @@
 
 Prints the result in the format requested by the problem statement::
 
-    Timestamp : 00:05:24.603
-    Frame     : 7782
+    Timestamp : 00:05:25.312
+    Frame     : 7799
     Text      : "My mind rebels at stagnation."
     Image     : data/output/<job>/frame.jpg
 

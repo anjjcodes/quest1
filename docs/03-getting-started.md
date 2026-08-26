@@ -45,16 +45,16 @@ dialogue-locator <url> "<line>" --fast-model small --no-verify -v # overrides, d
 Output (exit code 0 found / 2 not found / 3 heard but not onscreen / 1 error):
 
 ```
-Timestamp : 00:05:24.603
-Frame     : 7782
+Timestamp : 00:05:25.312
+Frame     : 7799
 Text      : "My mind rebels at stagnation."
-Image     : data/output/0d7f1c22761a/frame.jpg
+Image     : data/output/2c91529de1a1/frame.jpg
 Score     : 100.0
 Face      : 1 detected (best 0.95)
-Mouth     : moving (score 0.087)
+Mouth     : moving (score 0.074)
 Verify    : asr_large_model -> confirmed (100.0)
 Scanned   : 330.3s of audio
-Result    : data/output/0d7f1c22761a/result.json
+Result    : data/output/2c91529de1a1/result.json
 ```
 
 ## Run — server + web UI

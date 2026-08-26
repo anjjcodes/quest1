@@ -17,13 +17,25 @@ run) or set `DL_STORAGE__KEEP_INTERMEDIATE=false`.
 
 | Item | Measured |
 |---|---|
-| streaming pass, `base` | ≈ 12× realtime → 55-min video worst case ≈ 5 min |
+| streaming pass, `base` | ≈ 60× realtime → 55-min video worst case ≈ 1 min |
 | streaming pass, `small` | ≈ 3× realtime → worst case ≈ 18 min |
-| verification, `small`, ±12 s window | 15.6 s in the reference ok.ru run (skipped entirely when the first pass scores ≥ 90) |
+| verification, `small`, ±12 s window | ≈ 10 s (skipped entirely when the first pass scores ≥ 90) |
+| thread count (`whisper.cpu_threads`) | 4 P-cores 5.4 s vs 8 cores 90.9 s for the same 331 s scan — see below |
 | model load (cached weights) | `base` 1 s, `medium` 3–25 s (first load converts to int8) |
 | first-time weight download | `base` 140 MB, `small` 460 MB, `medium` 1.5 GB |
-| 18-min JFK speech end-to-end, line at 9:13 | 91 s (download 0.4 + audio 6 + transcription 50 + verification 34) |
-| 55-min ok.ru reference video, line at 5:24 | 59 s with the audio cached (transcription 38.7 + verification 15.6 + vision 2.8) |
+| 55-min ok.ru reference video, line at 5:25, audio cached | search 331 s of audio ≈ 8.5 s + verification ≈ 10 s + download/frame/vision ≈ 6 s |
+| 18-min JFK speech, line at 9:13 | scan stops at 51 % of the audio; same per-stage rates as above |
+
+The two end-to-end rows are per-stage measurements on the cached reference audio, taken after
+the `cpu_threads` fix. Earlier revisions of this table quoted 59 s and 91 s totals measured
+before that fix, when the streaming pass ran at ~3.6× realtime instead of ~60×; they are not
+comparable and have been removed rather than rescaled.
+
+> **If transcription looks 10-20x slower than the table above**, check `whisper.cpu_threads`.
+> The default of `0` sizes the pool to the machine's *performance* cores. Forcing it to the
+> total core count on a big.LITTLE CPU (every Apple Silicon Mac) makes every parallel region
+> run at efficiency-core speed: an M2 measured 5.4 s at 4 threads against 90.9 s at 8, with
+> byte-identical output. Symptom: `base` running at ~3.6x realtime instead of ~60x.
 
 **Transcription** is now the dominant cost. The audio-first fetch shipped, so the search never
 downloads the full video: it pulls the audio stream (tens of MB), and only a verified match
@@ -82,6 +94,6 @@ dialogue-locator "https://www.youtube.com/watch?v=jNQXAC9IVRw" "they have really
 # 18 min JFK Rice speech: found at 00:09:13.203, frame 33159 (59.94 fps), verifier confirmed (+0.29 s)
 dialogue-locator "https://www.youtube.com/watch?v=WZyRbnpGyzQ" "We choose to go to the moon in this decade and do the other things"
 
-# problem statement: found at 00:05:24.603, frame 7782 (23.976 fps), face 0.95, mouth 0.087 -> onscreen
+# problem statement: found at 00:05:25.312, frame 7799 (23.976 fps), face 0.95, mouth 0.074 -> onscreen
 dialogue-locator "https://ok.ru/video/248244667877" "My mind rebels at stagnation"
 ```

@@ -125,8 +125,8 @@ interval. The epsilon keeps `t` exactly on a boundary in the frame that starts t
 @ 25 fps → frame 37 → `00:00:01.480`). Note the timestamp equals `k/fps` only for a whole
 video: when the frame comes from a clip it is `clip_start + local_frame/fps`, and since the cut
 point need not land on a source frame boundary the result can sit a few milliseconds off the
-`k/fps` grid (canonical run: frame 7782 @ 23.976 fps, timestamp 324.603 s, while
-`7782/23.976` = 324.578 s).
+`k/fps` grid (canonical run: frame 7799 @ 23.976 fps, timestamp 325.312 s, while
+`7799/23.976` = 325.283 s).
 
 ### Reading
 

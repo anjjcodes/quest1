@@ -1,7 +1,7 @@
 # 6. Testing
 
-273 tests under `src/tests/`, all offline by default (266 pass, 7 skip without opt-in env vars),
-~15 s. Configured in `pyproject.toml`
+309 tests under `src/tests/`, all offline by default (302 pass, 7 skip without opt-in env
+vars: 5 need `DL_RUN_NETWORK_TESTS=1`, 2 need `DL_RUN_MODEL_TESTS=1`), ~17 s. Configured in `pyproject.toml`
 (`[tool.pytest.ini_options]`: `testpaths=src/tests`, `pythonpath=src`, live logging on).
 
 ## Run
