@@ -261,10 +261,17 @@ class MouthMovementConfig(BaseModel):
     Tracks the lip landmarks across the video frames of the matched dialogue
     window and decides whether the mouth moves significantly. The per-frame
     signal is *mouth openness*: the inner-lip gap (landmarks 13-14) divided by
-    the mouth width (61-291), which is scale- and distance-invariant. The
-    movement score is the standard deviation of that signal over the window;
-    measured values: ~0.09 while speaking vs ~0.001 landmark jitter on a
-    static face, so the default threshold sits well between the two.
+    the mouth width (61-291), which is scale- and distance-invariant.
+
+    Two settings carry the accuracy of this stage. ``crop_padding`` /
+    ``min_crop_size`` control the face crop the landmarker is fed - the
+    landmarker's own detector only finds large faces, so on a wide shot it must
+    be handed the box BlazeFace found rather than the whole frame.
+    ``score_window_seconds`` controls how the series is reduced to a score: the
+    spread around a straight-line fit is taken over short sliding windows and
+    the *largest* one wins, so a line that is only on camera for its last second
+    still counts, and a head that merely turns during a still-mouthed reaction
+    shot does not.
     """
 
     enabled: bool = Field(
@@ -273,10 +280,15 @@ class MouthMovementConfig(BaseModel):
         "check is enabled and confirmed a face.",
     )
     movement_threshold: float = Field(
-        0.02,
+        0.03,
         gt=0,
-        description="Minimum standard deviation of mouth openness to count as "
-        "significant movement.",
+        description="Minimum movement score to count as speaking. Calibrated on "
+        "the cached corpus of real matches: faces that are present but silent - "
+        "still faces, a voice-over read with the mouth shut, a listener whose "
+        "head turns through a reaction shot - score 0.003-0.021, and faces "
+        "speaking on camera 0.046-0.123. 0.03 sits near the middle of that gap. "
+        "It moved up with min_face_confidence: a stricter landmarker re-detects "
+        "more often and smooths less, so a still face carries more jitter.",
     )
     min_face_frames: int = Field(
         5,
@@ -290,14 +302,77 @@ class MouthMovementConfig(BaseModel):
         description="Cap on how much of the dialogue window is analysed; long "
         "lines are judged on their first seconds.",
     )
+    score_window_seconds: float = Field(
+        0.5,
+        gt=0,
+        description="Length of the sliding window the movement score is measured "
+        "over. The score is the largest standard deviation of any such window, so "
+        "a short burst of speech is not diluted by the rest of the line (a "
+        "reaction shot before the camera cuts to the speaker) and a hard cut "
+        "between two still faces cannot inflate one long window into a verdict.",
+    )
+    crop_padding: float = Field(
+        0.6,
+        ge=0,
+        description="How much of the face box size to add around it before "
+        "landmarking, as a fraction. The landmarker needs the chin and forehead, "
+        "not just the detector's tight box.",
+    )
+    min_crop_size: int = Field(
+        256,
+        ge=1,
+        description="Face crops shorter/narrower than this are upscaled to it "
+        "before landmarking. The landmarker downsamples its input, so a face that "
+        "is small in a 1920x1080 frame is lost unless it is cropped out and "
+        "enlarged - the failure that made cinematic wide shots read as 'no face'.",
+    )
+    box_carry_seconds: float = Field(
+        0.4,
+        ge=0,
+        description="How long a face box is reused on frames where detection "
+        "finds nothing. BlazeFace flickers on faces that are small in the frame "
+        "(a 290px face in 1920x1080 scores ~0.35, on and off frame to frame), "
+        "while the landmarker is reliable on a crop, so the last known box is "
+        "carried forward and the landmarker confirms or rejects it. Bounded so a "
+        "cut cannot attribute a new shot's face to the previous run; 0 disables.",
+    )
+    shot_change_shift: float = Field(
+        0.5,
+        gt=0,
+        description="A face box that jumps by more than this fraction of its own "
+        "width between adjacent frames is a different shot, not motion. Scoring "
+        "never spans a shot change: the step between two faces' resting mouths "
+        "would otherwise read as movement.",
+    )
+    shot_change_scale: float = Field(
+        2.0,
+        gt=1,
+        description="A face box that grows or shrinks by more than this factor "
+        "between adjacent frames is a different shot, like shot_change_shift. "
+        "Loose because the box itself is noisy on a marginal face: 267px and "
+        "416px boxes were measured on one unmoving face six frames apart, and "
+        "reading that as a cut chopped a single take into unscorable pieces.",
+    )
+    max_gap_seconds: float = Field(
+        0.12,
+        ge=0,
+        description="A run of frames tolerates gaps up to this long where the "
+        "landmarker found nothing. A one- or two-frame dropout is a miss, not a "
+        "cut, and splitting on it leaves half-syllables that the trend fit then "
+        "flattens to nothing. Longer gaps still split the run.",
+    )
     min_face_confidence: float = Field(
-        0.3,
+        0.5,
         ge=0,
         le=1,
-        description="Face detection/presence confidence for the landmarker, "
-        "lowered from MediaPipe's 0.5 default for the same reason as "
-        "face_detection.min_detection_confidence: faces in mid/wide shots "
-        "score lower than close-ups.",
+        description="Face detection/presence confidence for the landmarker. "
+        "This is the second opinion on whether a crop really holds a face, and "
+        "it must be strict: BlazeFace fires on blurred rubble at 0.45-0.62, "
+        "higher than it scores some real faces, so it cannot police itself. "
+        "MediaPipe's 0.5 default rejects those crops (18 landmarked frames drop "
+        "to 4) while leaving every verified real face untouched - the crop "
+        "already fixed what lowering this used to be for. 0.7 goes too far and "
+        "reads a listener's landmark noise as speech.",
     )
     model_path: Path = Field(
         Path("data/models/face_landmarker.task"),

@@ -1,6 +1,7 @@
 # 6. Testing
 
-148 tests under `src/tests/`, all offline by default, ~10 s. Configured in `pyproject.toml`
+273 tests under `src/tests/`, all offline by default (266 pass, 7 skip without opt-in env vars),
+~15 s. Configured in `pyproject.toml`
 (`[tool.pytest.ini_options]`: `testpaths=src/tests`, `pythonpath=src`, live logging on).
 
 ## Run
@@ -10,7 +11,7 @@ python -m pytest                                   # live INFO logs per test
 python -m pytest -q --log-cli-level=WARNING        # quiet
 python -m pytest --log-cli-level=DEBUG             # ffmpeg/ffprobe argv, per-segment ASR, per-window scores
 python -m pytest src/tests/test_matching.py -k settling --log-cli-level=INFO   # one behaviour, watch it happen
-DL_RUN_NETWORK_TESTS=1 python -m pytest -m network    # 2 real yt-dlp downloads (YouTube)
+DL_RUN_NETWORK_TESTS=1 python -m pytest -m network    # 5 tests: 3 real yt-dlp downloads + 2 MediaPipe model fetches
 DL_RUN_MODEL_TESTS=1  python -m pytest -k real        # real tiny/base Whisper models; macOS `say` synthesises speech
 ```
 
@@ -21,15 +22,17 @@ DL_RUN_MODEL_TESTS=1  python -m pytest -k real        # real tiny/base Whisper m
 | `test_config.py` | 5 | defaults, nested env override, validation, cache, `ensure_directories` |
 | `test_models.py` | 6 | `format_timestamp` edge cases, `to_dict` shapes, `timestamp` property precedence, exception `to_dict` |
 | `test_probe.py` | 7 | fps fraction parsing, video/silent/audio-only probes, missing/non-media files, missing binary |
-| `test_downloader.py` | 12 | URL accept/reject matrix, local path, audio-only file, **fake `YoutubeDL`** (success + progress + format string; four error mappings), cache reuse ignoring `.part`, 2 network tests |
+| `test_downloader.py` | 23 | URL accept/reject matrix, local path, audio-only file, **fake `YoutubeDL`** (success + progress + format string; four error mappings), cache reuse ignoring `.part`, 3 network tests |
 | `test_audio.py` | 11 | WAV params via `wave`, config respected, reuse vs force, no audio stream, missing ffmpeg, clips (from WAV/video, clamped start, bad range, past end), **ffmpeg timeout → kill** |
 | `test_transcription.py` | 17 | `load_pcm` (mono/stereo/wrong rate/garbage), **fake Whisper model**: word stripping/offset/indices, decode options follow config, laziness + early stop, progress monotonic, decode crash & start failure wrapped, path input, model cache keys, load failure wrapped, ABC, no-alignment fallback (with `caplog`), 1 real-model test |
 | `test_matching.py` | 25 | normalisation matrix, window sizes, exact match indices/timestamps, early-stop count, five ASR-error patterns, dialogue at start/end of stream, first occurrence, best-size selection, settling on/off, threshold, custom scorer, near-miss ordering/non-overlap/top-k, tracker semantics, `best_match` |
-| `test_verification.py` | 14 | `slice_audio` clamping, confirmed with refined absolute times and correct clip/offset, rejected on >5 drop, small drop confirmed, higher score confirmed, `TranscriptionError` → FAILED, no words → REJECTED, disabled → SKIPPED (model untouched), edge clamping, beyond audio → FAILED, `to_dict`, 1 real tiny→base test |
-| `test_frames.py` | 15 | frame arithmetic (incl. 29.97 fps), roundtrip, JPG/PNG, different frames differ, **OpenCV vs ffmpeg pixel agreement**, forced fallback (`caplog`), fps from file, clamp past end / negative, unreadable/missing video, unwritable output, `read_frame` |
-| `test_pipeline.py` | 14 | found end-to-end with fakes (refined timestamp used, frame at refined time, early stop, timings, progress order), `save_result`, not found + near-misses, rejected/failed/skipped verifier folding, verifier chain passes refinement along, invalid dialogue/URL fail **before** download, download error stage, unexpected exception wrapped with stage, cancellation, per-source cache + cleanup, `warm_up` loads both models |
-| `test_cli.py` | 7 | output format found/not found, `result.json` written, exit codes, `--json`, flag overrides reach `Settings` |
-| `test_api.py` | 15 | see [api](modules/api.md#testing-the-api) |
+| `test_verification.py` | 16 | `slice_audio` clamping, confirmed with refined absolute times and correct clip/offset, rejected on >5 drop, small drop confirmed, higher score confirmed, `TranscriptionError` → FAILED, no words → REJECTED, disabled → SKIPPED (model untouched), edge clamping, beyond audio → FAILED, `to_dict`, 1 real tiny→base test |
+| `test_frames.py` | 16 | frame arithmetic (incl. 29.97 fps), roundtrip, JPG/PNG, different frames differ, **OpenCV vs ffmpeg pixel agreement**, forced fallback (`caplog`), fps from file, clamp past end / negative, unreadable/missing video, unwritable output, `read_frame` |
+| `test_pipeline.py` | 33 | found end-to-end with fakes (refined timestamp used, frame at refined time, early stop, timings, progress order), `save_result`, not found + near-misses, rejected/failed/skipped verifier folding, verifier chain passes refinement along, invalid dialogue/URL fail **before** download, download error stage, unexpected exception wrapped with stage, cancellation, per-source cache + cleanup, `warm_up` loads both models, and the V2/V3 gating: no face -> `not_onscreen`, still mouth -> `not_onscreen`, both checks fail open on error, mouth check skipped when no face |
+| `test_face_detector.py` | 15 | box clamping and best-first sort, bad input rejected, **fake MediaPipe detector**, threshold respected, model file download (atomic `.part` write, too-small response rejected), 1 network test |
+| `test_mouth_movement.py` | 15 | openness maths, moving vs still verdicts, indeterminate under `min_face_frames`, window clamping, **fake landmarker**, invalid window rejected, 1 network test |
+| `test_cli.py` | 12 | output format found/not found, `result.json` written, exit codes, `--json`, flag overrides reach `Settings` |
+| `test_api.py` | 20 | see [api](modules/api.md#testing-the-api) |
 
 ## Fixtures and helpers (`conftest.py`)
 
@@ -52,6 +55,10 @@ Small hand-written fakes keep tests readable and pin the *contracts*:
 * `FakeDownloader`, `_FakeYDL` (patched in place of `yt_dlp.YoutubeDL`).
 * `FakePipeline` (CLI and API tests) — modes found/not_found/error/slow/crash; `slow` blocks on an
   `Event` so cancellation and queueing can be tested deterministically.
+* `FakeFaceDetector` / `FakeMouthAnalyzer` (`test_pipeline.py`) — return a chosen V2/V3 verdict, or
+  raise, so the gating and the fail-open paths are both testable without MediaPipe.
+* `FakeMpDetector` (`test_face_detector.py`) / `FakeLandmarker` (`test_mouth_movement.py`) — stand in
+  for the MediaPipe objects so the vision maths is tested without model weights.
 
 Monkeypatching is done at the narrowest seam (e.g. `AudioExtractor._run_ffmpeg`, not
 `subprocess.Popen`, which would also break ffprobe — that mistake was made once and is why).

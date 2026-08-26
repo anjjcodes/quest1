@@ -85,7 +85,7 @@ decoding → `TranscriptionError("… while decoding")`, after logging how many 
 |---|---|---|
 | tiny | ~40× | rough text |
 | base | ~12× | **streaming default** |
-| small | ~3× | previous default |
-| medium | ~0.6× | verification only (±20 s window ≈ 30–60 s) |
+| small | ~3× | **verification default** (`verify_model`); on the ±12 s window (≈ 26 s of audio) the reference run took 15.6 s |
+| medium | ~0.6× | optional, slower verification |
 
 Beam size 1 vs 5 made no measurable difference on CPU (ctranslate2 batches the beams).

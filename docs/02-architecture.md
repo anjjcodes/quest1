@@ -61,7 +61,7 @@ flowchart TD
     E -->|"no match and voice filter was on"| R["scan once more with the voice filter off"]
     R -->|match| V
     R -->|still nothing| NF["NOT_FOUND, report the 3 closest windows"]
-    V -->|"confirmed, or rejected with a warning"| CL["download a full quality clip, 5 s padding around the match"]
+    V -->|"confirmed, or rejected with a warning"| CL["download a high quality clip, 5 s padding around the match"]
     CL --> FR["frame number = floor(t × fps), save the frame image"]
     FR --> FC{"face visible in the frame? (V2)"}
     FC -->|no| NO["NOT_ONSCREEN (match details still reported)"]

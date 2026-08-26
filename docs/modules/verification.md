@@ -59,6 +59,9 @@ Steps:
 
 ### What the verifier catches (real runs)
 
+Both runs below were recorded when `verify_model` defaulted to `medium`; the default is now
+`small`, but the behaviour they demonstrate is the rule, not the model.
+
 * **Repetition ambiguity** (JFK, "We choose to go to the moon…" said three times; only the third
   continues with "in this decade…"): fast pass pinned the start to an earlier repeat; `medium`
   re-transcribed cleanly and moved it **+6.4 s** to the true first occurrence of the full line,

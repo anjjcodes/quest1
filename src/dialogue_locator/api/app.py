@@ -28,8 +28,9 @@ def create_app(settings: Settings | None = None, pipeline: DialoguePipeline | No
     settings = settings or get_settings()
     configure_logging(settings.logging)
     settings.ensure_directories()
-    # PUT /api/settings rebuilds the pipeline through this factory; deriving it
-    # from the injected pipeline's type keeps test fakes fake across rebuilds.
+    # A job carrying settings overrides is run on its own pipeline built through
+    # this factory; deriving it from the injected pipeline's type keeps test fakes
+    # fake for those per-job rebuilds too.
     pipeline_factory = DialoguePipeline if pipeline is None else type(pipeline)
     pipeline = pipeline or DialoguePipeline(settings)
 

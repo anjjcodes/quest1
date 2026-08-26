@@ -36,6 +36,7 @@ the current stage and the directories. `_Run._execute` reads as the stage list; 
 | 4 | `transcription` (+`matching`) | `warm_up()`, then `for word in transcriber.transcribe(samples): matcher.feed(word)`; break on match; `stream.close()` in a `finally` so the decoder stops even on error/cancel; `matcher.finish()` if the stream ended. On a miss with the VAD on: one retry scan with the VAD off (decision #24) | `TranscriptionError` |
 |   | not found → | return `LocalizationResult(NOT_FOUND, near_misses, transcribed_seconds)` | — |
 | 5 | `verification` | build `VerificationContext`; for each verifier: fold the outcome (see below) | never raises (verifiers return FAILED) |
+|   | *guard* | stages 6–9 run only when the source is a URL or the probed media has a video stream; an audio-only local file instead adds the warning "Source has no video stream; returning the timestamp without a frame." Setting `face_detection.enabled=False` skips **both** visual stages | — |
 | 6 | `download_video` | `downloader.fetch_video_clip(source, match.start, match.end, ...)` — a few seconds of full quality around the *verified* match | `DownloadError` |
 | 7 | `frame` | `frame_extractor.extract(clip, match.start, output_dir/<job>/frame)` | `FrameExtractionError` |
 | 8 | `face_detection` (V2) | `face_detector.detect_file(frame)`; no face → status `NOT_ONSCREEN`; a crashed check fails open with a warning | never fails the job |

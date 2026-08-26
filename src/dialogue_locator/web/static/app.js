@@ -240,9 +240,36 @@
     const notOnscreen = r.status === "not_onscreen";
     const banner = $("r-onscreen");
     banner.hidden = !notOnscreen;
-    if (notOnscreen) banner.textContent = r.face_present
-      ? "Not an onscreen dialogue — a face is visible, but its mouth is not moving while the line is spoken."
-      : "Not an onscreen dialogue — the line is heard at this timestamp, but no human face is visible in the frame.";
+    if (notOnscreen) {
+      // The verdict comes from the window scan, so the reason must too: the
+      // frame's own face says nothing about a line that opens off camera.
+      const scanned = r.mouth_movement;  // null when the check did not run
+      // A null verdict here always means "nothing held up as a face": when the
+      // scan genuinely cannot tell, the pipeline keeps the result as found.
+      banner.textContent = scanned && scanned.moving === false
+        ? "Not an onscreen dialogue — a face is on camera during the line, but its mouth is not moving (narration, dubbing or a reaction shot)."
+        : scanned && scanned.frames_with_face === 0
+          ? "Not an onscreen dialogue — the line is heard here, but no face appears at any point during it."
+          : scanned
+            ? `Not an onscreen dialogue — nothing that holds up as a face during the line: facial landmarks in only ${scanned.frames_with_face} of ${scanned.frames_analyzed} frames.`
+            : "Not an onscreen dialogue — the line is heard at this timestamp, but no human face is visible in the frame.";
+    }
+    // The mouth check moves the answer frame to where the speaker comes on
+    // camera, which can be later than where the line starts in the audio.
+    const mm = r.mouth_movement;
+    // Only worth explaining when the gap is visible to a viewer: a two-frame
+    // move off a title card needs no banner, a cut away from the speaker does.
+    const MOVED_NOTE_SECONDS = 0.2;
+    const movedFrame = Boolean(
+      mm && r.match && r.frame && r.frame.timestamp - r.match.start > MOVED_NOTE_SECONDS);
+    const movedToSpeaker = Boolean(movedFrame && mm.movement_start != null);
+    const movedBanner = $("r-moved");
+    movedBanner.hidden = !movedFrame;
+    if (movedFrame) movedBanner.textContent =
+      `The line starts at ${r.match.timestamp} while the camera is elsewhere. `
+      + (movedToSpeaker
+        ? `Showing ${r.frame.timestamp_str}, where the speaker is on camera saying it.`
+        : `Showing ${r.frame.timestamp_str}, where the face judged for this line first appears.`);
     const hasFrame = Boolean(job.frame_url && r.frame);
     $("frame-figure").hidden = !hasFrame;
     if (hasFrame) {
@@ -254,6 +281,7 @@
     $("output-block").textContent = [
       `Timestamp : ${r.timestamp}`,
       `Frame     : ${r.frame_number ?? "—"}`,
+      ...(movedFrame ? [`Line audio: ${r.match.timestamp} (starts off camera)`] : []),
       `Text      : "${r.matched_text}"`,
     ].join("\n");
 
@@ -269,14 +297,13 @@
       : r.face_present === false
         ? `<span class="badge not_onscreen">no face in frame</span>`
         : `<span class="badge none">not run</span>`;
-    const mm = r.mouth_movement;
     $("r-mouth").innerHTML = !mm
       ? `<span class="badge none">not run</span>`
       : mm.moving === true
-        ? `<span class="badge confirmed">moving · score ${mm.movement_score.toFixed(3)}</span>`
+        ? `<span class="badge confirmed">moving · score ${mm.movement_score.toFixed(3)}${movedToSpeaker ? ` · from ${esc(r.frame.timestamp_str)}` : ""}</span>`
         : mm.moving === false
           ? `<span class="badge not_onscreen">not moving · score ${(mm.movement_score ?? 0).toFixed(3)}</span>`
-          : `<span class="badge none" title="face landmarks in ${mm.frames_with_face} of ${mm.frames_analyzed} frames">indeterminate</span>`;
+          : `<span class="badge none" title="facial landmarks in ${mm.frames_with_face} of ${mm.frames_analyzed} frames">no face to judge</span>`;
     $("r-scanned").textContent = r.transcribed_seconds != null ? `${fmtSecs(r.transcribed_seconds)}${r.video && r.video.duration ? ` of ${fmtSecs(r.video.duration)} (${Math.round(100 * r.transcribed_seconds / r.video.duration)}%)` : ""}` : "—";
     $("r-video").textContent = r.video ? `${r.video.title || "—"} · ${r.video.width}×${r.video.height} @ ${(r.video.fps || 0).toFixed(3)} fps` : "—";
     $("r-total").textContent = fmtSecs((r.stage_timings || {}).total);

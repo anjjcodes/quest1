@@ -36,9 +36,9 @@ user can tell whether the dialogue text or the video is wrong.
 | Question | Answer | Where |
 |---|---|---|
 | How does the solution determine **where to look** in the video? | It doesn't guess — it listens from the start and stops at the first fuzzy match, using VAD to skip silence. | [matching](modules/matching.md), [transcription](modules/transcription.md) |
-| How does it determine the **relevant frame**? | Start time of the first matched word (refined by the large model) → `floor(t × fps)`; frame read by index with OpenCV, ffmpeg fallback verified pixel-for-pixel. | [media § frames](modules/media.md#frames) |
-| How does it **extract the text**? | Word-level ASR (Faster-Whisper, word timestamps) — the returned text is what the *large* model heard in the confirmed window. | [transcription](modules/transcription.md), [verification](modules/verification.md) |
-| How are **ambiguous / uncertain** results handled? | Two-pass design (fast candidate → large-model confirmation with a ±5-point rule), warnings when the verifier disagrees, near-miss report when nothing matches, first-occurrence semantics. See the JFK case study. | [decision log](09-decision-log.md), [verification](modules/verification.md) |
+| How does it determine the **relevant frame**? | Start time of the first matched word (refined by the large model) → `floor(t × fps)`; frame read by index with OpenCV, ffmpeg fallback verified to agree within codec noise. | [media § frames](modules/media.md#frames) |
+| How does it **extract the text**? | Word-level ASR (Faster-Whisper, word timestamps) — the returned text is what the *large* model heard in the confirmed window, unless the first pass already scored ≥ 90 (`skip_above_score`), in which case the re-check is skipped and the fast model's text stands. | [transcription](modules/transcription.md), [verification](modules/verification.md) |
+| How are **ambiguous / uncertain** results handled? | Two-pass design (fast candidate → large-model confirmation, accepted unless it scores more than 5 points *below* the first pass), warnings when the verifier disagrees, near-miss report when nothing matches, first-occurrence semantics. See the JFK case study. | [decision log](09-decision-log.md), [verification](modules/verification.md) |
 | Prompts used with an LLM | `prompts.txt` in the repository root. | — |
 
 ## Versions
@@ -59,4 +59,5 @@ All three are implemented; further visual stages plug in the same way (see
 * Interfaces: CLI (`dialogue-locator`), HTTP API (`dialogue-locator-server`, FastAPI, OpenAPI at
   `/docs`), single-page web UI at `/`.
 * Measured on an Apple M2 (CPU, int8): streaming pass `base` ≈ 12× realtime, `small` ≈ 3×;
-  verification with `medium` ≈ 0.6× realtime on a ~40 s window (≈ 30–60 s).
+  verification with the default `small` over the ±12 s window (≈ 26 s of audio) took 15.6 s in
+  the reference run.

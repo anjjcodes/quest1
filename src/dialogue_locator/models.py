@@ -295,8 +295,22 @@ class MouthMovementResult:
     """Lip activity over the video frames of a dialogue window.
 
     ``moving`` is ``None`` when the analyser saw too few frames with a face to
-    judge (indeterminate), otherwise whether the movement score - the standard
-    deviation of the per-frame mouth-openness signal - reached the threshold.
+    judge (indeterminate), otherwise whether the movement score reached the
+    threshold. The score is the standard deviation of the per-frame
+    mouth-openness signal over the *most active* short sliding window, not over
+    the whole dialogue window: a line can be off camera for most of its length
+    and still be onscreen dialogue for the part where the camera is on the
+    speaker.
+
+    ``movement_start`` is where that most active window begins (absolute source
+    seconds) - the first moment the speaker is verifiably on camera saying the
+    line, which is the frame worth reporting. It is set only on a positive
+    verdict.
+
+    ``face_start`` is where the first face was landmarked, whatever the verdict.
+    On a negative one that is the face being called silent, and so the frame
+    worth showing as evidence: a line can begin over a title card and cut to the
+    speaker immediately, and reporting the title card explains nothing.
     """
 
     moving: bool | None
@@ -306,6 +320,8 @@ class MouthMovementResult:
     frames_with_face: int
     window_start: float  # absolute seconds into the source, as analysed
     window_end: float
+    movement_start: float | None = None  # start of the highest-scoring window
+    face_start: float | None = None  # first frame with a face, verdict aside
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -318,6 +334,10 @@ class MouthMovementResult:
             "frames_with_face": self.frames_with_face,
             "window_start": round(self.window_start, 3),
             "window_end": round(self.window_end, 3),
+            "movement_start": None
+            if self.movement_start is None
+            else round(self.movement_start, 3),
+            "face_start": None if self.face_start is None else round(self.face_start, 3),
         }
 
 

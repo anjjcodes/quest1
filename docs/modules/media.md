@@ -120,8 +120,13 @@ class FrameExtractor:
 Frame *k* is displayed during `[k/fps, (k+1)/fps)`, so the frame visible at time `t` is
 `floor(t × fps)` — **not** `round`, which would pick the next frame for the second half of every
 interval. The epsilon keeps `t` exactly on a boundary in the frame that starts there.
-`FrameInfo.timestamp` is the frame's own time `k/fps`, so the printed timestamp and frame number are
-always consistent with each other (requested 1.500 s @ 25 fps → frame 37 → `00:00:01.480`).
+`FrameInfo.timestamp` is the extracted frame's own presentation time and `frame_number` is
+`floor(timestamp × fps)`, so the two are always consistent with each other (requested 1.500 s
+@ 25 fps → frame 37 → `00:00:01.480`). Note the timestamp equals `k/fps` only for a whole
+video: when the frame comes from a clip it is `clip_start + local_frame/fps`, and since the cut
+point need not land on a source frame boundary the result can sit a few milliseconds off the
+`k/fps` grid (canonical run: frame 7782 @ 23.976 fps, timestamp 324.603 s, while
+`7782/23.976` = 324.578 s).
 
 ### Reading
 

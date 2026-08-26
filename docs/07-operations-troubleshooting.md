@@ -4,8 +4,9 @@
 
 | Path | Contents | Lifetime |
 |---|---|---|
-| `data/work/<sha1(source)[:16]>/` | `video.mp4`, `audio.wav` (+ `.part` while downloading) | kept while `storage.keep_intermediate=True` (default); reused across dialogues for the same source |
+| `data/work/<sha1(source)[:16]>/` | `media.<ext>` (the audio-first search fetch), `audio.wav`, `clip_<startms>_<endms>.mp4` (+ `.part` while downloading) | kept while `storage.keep_intermediate=True` (default); reused across dialogues for the same source |
 | `data/output/<job_id>/` | `frame.jpg`, `result.json` | permanent (delete manually) |
+| `data/models/` | MediaPipe weights: `blaze_face_short_range.tflite` (~230 KB), `face_landmarker.task` (~3.7 MB) | downloaded on first V2/V3 run; permanent |
 | `~/.cache/huggingface/hub/` | Whisper weights (`models--Systran--faster-whisper-*`) | permanent; `whisper.download_root` relocates |
 | `.venv/` | environment | — |
 
@@ -18,14 +19,18 @@ run) or set `DL_STORAGE__KEEP_INTERMEDIATE=false`.
 |---|---|
 | streaming pass, `base` | ≈ 12× realtime → 55-min video worst case ≈ 5 min |
 | streaming pass, `small` | ≈ 3× realtime → worst case ≈ 18 min |
-| verification, `medium`, ±20 s window | 30–60 s |
+| verification, `small`, ±12 s window | 15.6 s in the reference ok.ru run (skipped entirely when the first pass scores ≥ 90) |
 | model load (cached weights) | `base` 1 s, `medium` 3–25 s (first load converts to int8) |
 | first-time weight download | `base` 140 MB, `small` 460 MB, `medium` 1.5 GB |
-| 18-min JFK speech end-to-end, line at 9:13 | 193 s (download 18 + audio 2 + transcription 116 with `small` + verification 57) |
+| 18-min JFK speech end-to-end, line at 9:13 | 91 s (download 0.4 + audio 6 + transcription 50 + verification 34) |
+| 55-min ok.ru reference video, line at 5:24 | 59 s with the audio cached (transcription 38.7 + verification 15.6 + vision 2.8) |
 
-The single biggest cost on the PS video is the **download**: the 55-minute ok.ru rendition at
-720p is ~1.5 GB (≈ 2 h at 200 KB/s). Mitigations today: `DL_DOWNLOAD__MAX_HEIGHT=360`, or download
-once elsewhere and run on the local file. Planned: audio-first fetch (see decision log).
+**Transcription** is now the dominant cost. The audio-first fetch shipped, so the search never
+downloads the full video: it pulls the audio stream (tens of MB), and only a verified match
+triggers a full-quality clip of a few seconds. `DL_DOWNLOAD__MAX_HEIGHT` no longer affects the
+search at all — it caps only that final clip. On hosts that throttle a single connection (ok.ru
+serves ~200 KB/s) the audio fetch is still the slow part; download once elsewhere and run against
+the local file if that bites.
 
 ## Errors you will actually see
 
@@ -71,12 +76,12 @@ text with timestamps, and every improvement of the best score.
 ## Reproducing the reference runs
 
 ```bash
-# 19 s YouTube clip: found at 00:00:06.800, frame 102 (15 fps), verifier rejected (medium mis-hears "trunks")
+# 19 s YouTube clip: found at 00:00:07.260, frame 108 (15 fps), face + mouth movement -> onscreen
 dialogue-locator "https://www.youtube.com/watch?v=jNQXAC9IVRw" "they have really really really long trunks"
 
-# 18 min JFK Rice speech: found at 00:09:13.187, frame 16579 (29.97 fps), verifier shifted +6.4 s and confirmed
+# 18 min JFK Rice speech: found at 00:09:13.203, frame 33159 (59.94 fps), verifier confirmed (+0.29 s)
 dialogue-locator "https://www.youtube.com/watch?v=WZyRbnpGyzQ" "We choose to go to the moon in this decade and do the other things"
 
-# problem statement
+# problem statement: found at 00:05:24.603, frame 7782 (23.976 fps), face 0.95, mouth 0.087 -> onscreen
 dialogue-locator "https://ok.ru/video/248244667877" "My mind rebels at stagnation"
 ```

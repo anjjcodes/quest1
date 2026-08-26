@@ -16,8 +16,9 @@ web/static/app.js           vanilla JS client — talks only to /api/*
 │ 1 Input                   │ 3 Result                                          │
 │   source, dialogue, reuse │   empty ▸ found ▸ not found ▸ error               │
 │   [Find dialogue][Cancel] │   frame image · OUTPUT block (PS format, Copy)    │
-│ 2 Pipeline                │   facts: score, first pass, verification,         │
-│   stepper (6 stages)      │          audio scanned, video, processing time    │
+│ 2 Pipeline                │   facts: score, first pass, verification, face    │
+│   stepper (9 stages)      │          check, mouth, audio scanned, video,      │
+│                           │          processing time                          │
 │   progress bar + message  │   timing bar · warnings · raw JSON                │
 │   event log               │ Recent jobs (status, dialogue, source, result…)   │
 └───────────────────────────┴──────────────────────────────────────────────────┘
@@ -29,7 +30,10 @@ web/static/app.js           vanilla JS client — talks only to /api/*
 * **Watch** a job: `#job=<id>` is written to the URL (refresh/share re-attaches), the stepper and
   bar are reset, polling starts (1 s).
 * **Progress rendering**: stage → stepper state (`done` ✓ / `active` pulsing / `failed` ✕ /
-  `skipped` struck-through for verification+frame on not-found); `fraction` → determinate bar
+  `skipped` struck-through / `off` for stages the job's settings disabled). On `not_found` five
+  stages are struck through: `download_video`, `verification`, `frame`, `face_detection` and
+  `mouth_movement`; on any finished job an optional stage with no recorded timing is shown as
+  skipped too. `fraction` → determinate bar
   (download %, audio %, transcription position) or indeterminate; stage timings appear next to each
   step when the result arrives; the event log appends only new entries from the ring buffer.
 * **Result rendering**: `found` → image (+ Download link), the PS-format output block with a Copy
@@ -41,6 +45,14 @@ web/static/app.js           vanilla JS client — talks only to /api/*
 * **Resilience**: a 404 while polling (server restarted, job expired) drops the job, clears the
   hash, re-enables the form with an explanation; transient errors retry 5× at 2 s before giving up.
 * **History**: `GET /api/jobs` on load, after each finished job and via Refresh; "view" re-watches.
+* **Settings modal**: the gear button (top right) opens a modal seeded from `GET /api/settings`
+  with the server defaults. Edits live in a page-local `pageConfig` that is sent as
+  `JobCreate.settings` with every submit and forgotten on refresh — nothing on the server is
+  mutated. The three stage toggles are **order dependent**: `cascadeStages()` unchecks and
+  disables each downstream box when its upstream is off, in the order verification → face
+  detection → mouth movement, and `apply_setting_overrides` enforces the same cascade server side.
+  Six numeric fields are validated with `checkValidity()` before Apply; there is a reset to
+  defaults, and Escape or a backdrop click closes.
 
 ## Styling notes (`app.css`)
 

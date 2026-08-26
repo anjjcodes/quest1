@@ -4,13 +4,14 @@
 
 Prints the result in the format requested by the problem statement::
 
-    Timestamp : 00:05:12.480
-    Frame     : 7812
-    Text      : "My mind rebels at stagnation"
+    Timestamp : 00:05:24.603
+    Frame     : 7782
+    Text      : "My mind rebels at stagnation."
     Image     : data/output/<job>/frame.jpg
 
-Exit codes: 0 found, 2 not found (near-misses printed), 3 found in audio but
-no face on camera (not an onscreen dialogue; details still printed), 1 error.
+Exit codes: 0 found, 2 not found (near-misses printed), 3 found in the audio but
+not onscreen (no face in the frame, or a face whose mouth never moves during the
+line; details are still printed), 1 error.
 """
 
 from __future__ import annotations
@@ -38,7 +39,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--verify-model", help="Whisper model for verification (default from config)")
     p.add_argument("--no-verify", action="store_true", help="skip the large-model verification pass")
     p.add_argument("--threshold", type=float, help="fuzzy match threshold 0-100")
-    p.add_argument("--max-height", type=int, help="max video height to download")
+    p.add_argument("--max-height", type=int, help="max height for the final clip download (the search uses audio only)")
     p.add_argument("--output-dir", type=Path, help="where to write frame + result.json")
     p.add_argument("--work-dir", type=Path, help="where to cache downloads/audio")
     p.add_argument("--no-cache", action="store_true", help="ignore previously downloaded media")
@@ -100,8 +101,14 @@ def format_result(result: LocalizationResult) -> str:
             lines.append("Face      : none detected")
         if result.mouth_movement is not None:
             mm = result.mouth_movement
-            state = {True: "moving", False: "not moving", None: "indeterminate"}[mm.moving]
-            score = "" if mm.movement_score is None else f" (score {mm.movement_score:.3f})"
+            if mm.moving is None:
+                # No verdict on the lips because nothing held up as a face - say
+                # that, rather than "indeterminate" next to a definite result.
+                state = f"no face to judge ({mm.frames_with_face}/{mm.frames_analyzed} frames)"
+                score = ""
+            else:
+                state = "moving" if mm.moving else "not moving"
+                score = "" if mm.movement_score is None else f" (score {mm.movement_score:.3f})"
             lines.append(f"Mouth     : {state}{score}")
         for v in result.verifications:
             lines.append(f"Verify    : {v.verifier} -> {v.status.value}" + (f" ({v.score:.1f})" if v.score is not None else ""))

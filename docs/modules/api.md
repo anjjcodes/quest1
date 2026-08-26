@@ -1,16 +1,19 @@
 # Module: `api/`
 
 A thin FastAPI adapter over the pipeline. **No processing logic lives here**: `routes.py`
-converts HTTP ↔ `PipelineRequest` / `LocalizationResult`; `jobs.py` only schedules and records.
+converts HTTP ↔ `PipelineRequest` / `LocalizationResult` (and, when a job carries settings
+overrides, normalises the stage cascade and builds that job's pipeline); `jobs.py` only
+schedules and records.
 
 ## Endpoints (`routes.py`)
 
 | Method | Path | Returns | Notes |
 |---|---|---|---|
 | `GET` | `/api/health` | `HealthResponse` | version, configured models, threshold, `active_jobs` |
-| `POST` | `/api/jobs` | `202 JobResponse` | body `JobCreate{source, dialogue, reuse_cached_media}`; validates **synchronously** (dialogue via `TargetDialogue.parse`; URL-looking sources via `validate_url`; other sources must be existing files) → `422 {error, stage:"input", message}` |
+| `GET` | `/api/settings` | `SettingsView` | the server defaults the UI loads into its settings modal |
+| `POST` | `/api/jobs` | `202 JobResponse` | body `JobCreate{source, dialogue, reuse_cached_media, settings}`; `settings` is an optional `SettingsView` overriding the defaults **for that job only**; validates **synchronously** (dialogue via `TargetDialogue.parse`; URL-looking sources via `validate_url`; other sources must be existing files) → `422 {error, stage:"input", message}` |
 | `GET` | `/api/jobs` | `JobListResponse` | newest first |
-| `GET` | `/api/jobs/{id}` | `JobResponse` | status, latest `progress`, `progress_log` (≤ 50), `result` or `error`, `frame_url` |
+| `GET` | `/api/jobs/{id}` | `JobResponse` | status, latest `progress`, `progress_log` (≤ 50), `result` or `error`, `frame_url`, and `settings` (the effective normalised settings the job ran with) |
 | `GET` | `/api/jobs/{id}/frame` | image | `image/jpeg` or `image/png`; 404 if no frame |
 | `DELETE` | `/api/jobs/{id}` | `JobResponse` | cancels a queued/running job; removes a finished one from memory |
 | `GET` | `/`, `/static/*` | web UI | falls back to `{"docs": "/docs"}` if the web dir is missing |
@@ -27,7 +30,9 @@ queued ──(worker free)──▶ running ──▶ done | failed | cancelled
 ```python
 class JobManager:
     def __init__(self, pipeline, max_concurrent=1, retention_seconds=3600)
-    def submit(request) -> Job          # ThreadPoolExecutor(max_concurrent)
+    def submit(request, pipeline=None, settings_view=None) -> Job   # ThreadPoolExecutor(max_concurrent)
+    #   pipeline / settings_view are how a job runs with its own config overrides;
+    #   when omitted the job uses the manager's shared default pipeline.
     def get(job_id) / list() / cancel(job_id) / remove(job_id) / active_count / shutdown()
 ```
 
@@ -43,10 +48,14 @@ class JobManager:
 
 ## Schemas (`schemas.py`)
 
-`JobCreate`, `JobStatus`, `ProgressSchema`, `CandidateSchema`, `VerificationSchema`, `FrameSchema`,
+`StageToggles`, `SettingsView`, `JobCreate`, `JobStatus`, `ProgressSchema`, `CandidateSchema`,
+`VerificationSchema`, `FrameSchema`, `FaceBoxSchema`, `FaceDetectionSchema`, `MouthMovementSchema`,
 `ResultSchema` (mirrors `LocalizationResult.to_dict()`, `extra="allow"` so the full record passes
 through while the important fields are typed for OpenAPI), `ErrorSchema`, `JobResponse`,
 `JobListResponse`, `HealthResponse`.
+
+`SettingsView` carries the per-job overrides: the `StageToggles` cascade (verification → face
+detection → mouth movement) plus the numeric knobs the UI exposes.
 
 ## App factory (`app.py`)
 

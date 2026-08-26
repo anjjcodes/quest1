@@ -11,12 +11,14 @@ rest of the package.
 
 ```python
 class Settings(BaseSettings):            # pydantic-settings, env prefix DL_, nested delimiter __
-    download: DownloadConfig             # yt-dlp: max_height, retries, socket timeout, container
+    download: DownloadConfig             # yt-dlp: max_height, search_max_height, clip_padding, retries, timeout
     audio: AudioConfig                   # ffmpeg: sample_rate, channels, binaries, timeout
     whisper: WhisperConfig               # fast_model, verify_model, device, compute_type, language, VAD…
     matching: MatchingConfig             # match_threshold, window_tolerance, min_dialogue_words, top_k
-    verification: VerificationConfig     # enabled, search_window_seconds, max_score_drop
+    verification: VerificationConfig     # enabled, search_window_seconds, skip_above_score, max_score_drop
     frame: FrameConfig                   # image_format, jpeg_quality
+    face_detection: FaceDetectionConfig  # V2: enabled, min_detection_confidence, model path/url
+    mouth_movement: MouthMovementConfig  # V3: enabled, movement_threshold, min_face_frames, model path/url
     storage: StorageConfig               # work_dir, output_dir, keep_intermediate
     server: ServerConfig                 # host, port, max_concurrent_jobs, job_retention_seconds
     logging: LoggingConfig               # level, fmt
@@ -34,8 +36,9 @@ Full field list with defaults: [Configuration](../04-configuration.md).
 * **One sub-model per stage.** A stage's constructor takes only its own sub-model
   (`AudioExtractor(AudioConfig)`, `StreamingMatcher(dialogue, MatchingConfig)`). Tests build the
   sub-model directly with custom values; no environment juggling.
-* **Every field has a `Field(description=…)`** so `--help`-style documentation can be generated
-  from the model (that is how the reference table in doc 4 was produced).
+* **Fields carry a `Field(description=…)`** wherever the meaning is not obvious from the name, so
+  documentation can be generated from the model (that is how the reference table in doc 4 is
+  produced). Self-explanatory leaves such as `audio.channels` or `server.port` leave it empty.
 * **Validation at the edges**: `ge/le` bounds, `Literal` enums, a `field_validator` that expands
   `~` in paths. A typo like `DL_MATCHING__MATCH_THRESHOLD=150` fails at startup.
 * `compute_type` defaults to `int8` because ctranslate2 on Apple Silicon/CPU cannot run float16

@@ -93,7 +93,9 @@ class MouthMovementResult:
 @dataclass(frozen=True)
 class FrameInfo:
     frame_number: int
-    timestamp: float              # the frame's OWN presentation time (frame_number / fps)
+    timestamp: float              # the frame's OWN presentation time; for a clip this is
+                                  # clip_start + local_frame/fps, and frame_number is
+                                  # floor(timestamp x fps) — not necessarily timestamp x fps
     fps: float
     image_path: Path
     width, height: int | None

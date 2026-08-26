@@ -13,13 +13,16 @@ video and dialogue pair works.
 ```
 $ dialogue-locator "https://ok.ru/video/248244667877" "My mind rebels at stagnation"
 
-Timestamp : 00:05:25.183
-Frame     : 7796
+Timestamp : 00:05:24.603
+Frame     : 7782
 Text      : "My mind rebels at stagnation."
-Image     : data/output/9570dfafd02c/frame.jpg
+Image     : data/output/0d7f1c22761a/frame.jpg
 Score     : 100.0
 Face      : 1 detected (best 0.95)
-Mouth     : moving (score 0.077)
+Mouth     : moving (score 0.087)
+Verify    : asr_large_model -> confirmed (100.0)
+Scanned   : 330.3s of audio
+Result    : data/output/0d7f1c22761a/result.json
 ```
 
 That is real output from a run against the reference video.

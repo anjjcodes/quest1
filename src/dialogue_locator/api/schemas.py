@@ -137,6 +137,19 @@ class MouthMovementSchema(BaseModel):
     threshold: float
     frames_analyzed: int
     frames_with_face: int
+    movement_start: float | None = Field(
+        None,
+        description="Absolute seconds where the mouth was found moving - the moment "
+        "the speaker is on camera saying the line, and the frame the result reports. "
+        "Set only on a positive verdict; compare with match.start, which stays where "
+        "the line begins in the audio.",
+    )
+    face_start: float | None = Field(
+        None,
+        description="Absolute seconds of the first frame with a face during the line, "
+        "whatever the verdict. On a negative one this is the face judged silent, and "
+        "the frame the result reports when the line itself opens off camera.",
+    )
 
 
 class ResultSchema(BaseModel):

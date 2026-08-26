@@ -54,8 +54,13 @@ class FaceDetector:
     # ------------------------------------------------------------------ #
     # Public API
     # ------------------------------------------------------------------ #
-    def detect(self, image: np.ndarray) -> FaceDetectionResult:
-        """Return the faces visible in ``image`` (BGR, as produced by OpenCV)."""
+    def detect(self, image: np.ndarray, log_result: bool = True) -> FaceDetectionResult:
+        """Return the faces visible in ``image`` (BGR, as produced by OpenCV).
+
+        ``log_result=False`` suppresses the per-call summary line, for callers
+        that run this over every frame of a window (the V3 mouth check) and
+        would otherwise emit one log line per frame.
+        """
         self._validate_image(image)
         detector = self._ensure_loaded()
 
@@ -71,13 +76,14 @@ class FaceDetector:
 
         height, width = image.shape[:2]
         result = self._to_result(mp_result, width, height)
-        logger.info(
-            "Face detection: %d face(s) in %dx%d frame%s",
-            len(result.faces),
-            width,
-            height,
-            f", best confidence {result.faces[0].confidence:.3f}" if result.faces else "",
-        )
+        if log_result:
+            logger.info(
+                "Face detection: %d face(s) in %dx%d frame%s",
+                len(result.faces),
+                width,
+                height,
+                f", best confidence {result.faces[0].confidence:.3f}" if result.faces else "",
+            )
         return result
 
     def detect_file(self, path: Path) -> FaceDetectionResult:

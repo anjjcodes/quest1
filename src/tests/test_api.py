@@ -11,7 +11,7 @@ from fastapi.testclient import TestClient
 
 from dialogue_locator.api.app import create_app
 from dialogue_locator.api.jobs import JobManager
-from dialogue_locator.config import Settings
+from dialogue_locator.config import MouthMovementConfig, Settings
 from dialogue_locator.exceptions import DownloadError, PipelineCancelledError
 from dialogue_locator.models import (
     FrameInfo,
@@ -261,7 +261,10 @@ def test_get_settings_defaults(client):
     assert s["stages"] == {"verification": True, "face_detection": True, "mouth_movement": True}
     assert s["match_threshold"] == 80.0
     assert s["face_min_confidence"] == 0.3
-    assert s["mouth_movement_threshold"] == 0.02
+    # Against the config, not a literal: this asserts the settings endpoint
+    # surfaces the default, while the calibration itself is pinned in
+    # test_mouth_movement.py.
+    assert s["mouth_movement_threshold"] == MouthMovementConfig().movement_threshold
 
 
 def test_job_with_settings_overrides(client):

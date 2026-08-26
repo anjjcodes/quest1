@@ -59,15 +59,17 @@ from dialogue_locator.config import Settings
 from dialogue_locator.exceptions import (
     DialogueLocatorError,
     FaceDetectionError,
+    FrameExtractionError,
     MouthMovementError,
     PipelineCancelledError,
 )
 from dialogue_locator.matching.matcher import StreamingMatcher
 from dialogue_locator.media.audio import AudioExtractor
 from dialogue_locator.media.downloader import VideoDownloader, is_url, validate_url
-from dialogue_locator.media.frames import FrameExtractor
+from dialogue_locator.media.frames import FrameExtractor, timestamp_to_frame
 from dialogue_locator.models import (
     AudioInfo,
+    FaceDetectionResult,
     LocalizationResult,
     MatchCandidate,
     MediaInfo,
@@ -160,7 +162,12 @@ class DialoguePipeline:
             settings.frame, settings.audio.ffmpeg_binary, settings.audio.ffprobe_binary
         )
         self.face_detector = face_detector or FaceDetector(settings.face_detection)
-        self.mouth_analyzer = mouth_analyzer or MouthMovementAnalyzer(settings.mouth_movement)
+        # V3 crops each frame to the face before landmarking it, so it needs a
+        # detector too - the same one, so a job's face_detection overrides apply
+        # to both stages and only one model is loaded.
+        self.mouth_analyzer = mouth_analyzer or MouthMovementAnalyzer(
+            settings.mouth_movement, self.face_detector
+        )
 
     # ------------------------------------------------------------------ #
     def warm_up(self) -> None:
@@ -287,11 +294,17 @@ class _Run:
                 logger.info("Face detection disabled; skipping visual checks")
                 return result
             self._stage_face_detection(result)
-            if (
-                self.settings.mouth_movement.enabled
-                and result.face_detection is not None
-                and result.face_detection.face_present
-            ):
+            # V3 runs even when that one frame held no face. A line can open on
+            # a title card or a cutaway and cut to the speaker a frame later;
+            # only a scan of the whole window can tell that apart from a line
+            # nobody is on camera for. V3 therefore owns the final verdict.
+            #
+            # A face check that *errored* is different from one that found
+            # nothing: V3 crops to the boxes that detector produces, so with it
+            # broken V3 would judge whole frames again - the very thing that
+            # loses faces in wide shots - and could turn an infrastructure fault
+            # into a NOT_ONSCREEN. It stays skipped, and the job fails open.
+            if self.settings.mouth_movement.enabled and result.face_detection is not None:
                 self._check_cancel()
                 self._stage_mouth_movement(result, video)
         else:
@@ -444,6 +457,10 @@ class _Run:
         A match with no face on camera is reported as NOT_ONSCREEN (details are
         kept so the caller can inspect what was found). Fails open: if the
         check itself cannot run, the localisation stands, with a warning.
+
+        The verdict is only provisional when the V3 mouth check follows: that
+        stage scans the whole dialogue window and can find the speaker in a
+        later shot, overturning this one frame's answer.
         """
         assert result.frame is not None
         self._begin(PipelineStage.FACE_DETECTION, "Checking for a face in the frame")
@@ -460,18 +477,39 @@ class _Run:
                 message = f"{len(detected.faces)} face(s) visible in the frame"
             else:
                 result.status = ResultStatus.NOT_ONSCREEN
-                message = "No face visible - not an onscreen dialogue"
+                message = (
+                    "No face in this frame - checking the rest of the line"
+                    if self.settings.mouth_movement.enabled
+                    else "No face visible - not an onscreen dialogue"
+                )
                 logger.info("No face in frame %s; verdict: not_onscreen", result.frame.image_path.name)
             self._emit(PipelineStage.FACE_DETECTION, message, 1.0, detected.to_dict())
         self._end(PipelineStage.FACE_DETECTION)
 
     def _stage_mouth_movement(self, result: LocalizationResult, video: VideoInfo) -> None:
-        """V3: track the lips across the clip's frames for the matched window.
+        """V3: track the lips across the clip's frames and settle the verdict.
 
-        Only runs once V2 confirmed a face. A face whose mouth never moves is
-        not speaking the line (reaction shot, voice-over) -> NOT_ONSCREEN.
-        Indeterminate (too few landmark frames) or a crashed analyser fails
-        open with a warning, like the face check.
+        This stage, not V2, decides whether the line is onscreen dialogue,
+        because it is the only one that sees the whole window rather than a
+        single frame:
+
+        * a mouth moving anywhere during the line -> FOUND, and the answer frame
+          moves to that moment (:meth:`_move_frame_to`). This holds even
+          when the line's first frame had no face - it may open on a title card
+          or a cutaway and cut to the speaker afterwards.
+        * faces on camera but none of them moving -> NOT_ONSCREEN. The line is
+          narration, dubbing or a reaction shot. The answer frame moves to that
+          face if the line itself opened off camera, so the result shows what it
+          is talking about.
+        * barely any frame of the line landmarked -> NOT_ONSCREEN. V2 works on
+          whole frames and fires on things that are not faces; a box no mesh
+          fits is not a face, whatever its detection score.
+        * no face in the reported frame and none to judge in the window ->
+          NOT_ONSCREEN, the verdict V2 already reached.
+
+        Fails open, like the face check, in the one case that is genuinely
+        unmeasured: a face present throughout whose frames never line up into a
+        scorable run. A crashed analyser fails open too.
         """
         assert result.match is not None
         self._begin(PipelineStage.MOUTH_MOVEMENT, "Checking for mouth movement")
@@ -486,18 +524,71 @@ class _Run:
             self._emit(PipelineStage.MOUTH_MOVEMENT, warning, 1.0, {"error": exc.message})
         else:
             movement = result.mouth_movement
+            had_face = result.face_detection is not None and result.face_detection.face_present
             if movement.moving is True:
                 message = f"Mouth movement detected (score {movement.movement_score:.3f})"
+                moved = self._move_frame_to(result, video, movement.movement_start)
+                if moved:
+                    message += (
+                        f"; frame moved to {result.frame.timestamp_str}, where the speaker "
+                        "is on camera"
+                    )
+                if moved or had_face:
+                    # Overturns a NOT_ONSCREEN from the face check when the line
+                    # opened off camera: the speaker is on screen saying it, and
+                    # the reported frame now shows them.
+                    result.status = ResultStatus.FOUND
+                elif result.status is ResultStatus.NOT_ONSCREEN:
+                    # The speaker is on camera during the line but that frame
+                    # could not be produced (_move_frame_to warned), so
+                    # the frame in hand still shows no face. Do not claim
+                    # onscreen over a frame that does not show it.
+                    logger.warning(
+                        "Mouth moving but the speaker's frame is unavailable; keeping not_onscreen"
+                    )
             elif movement.moving is False:
                 result.status = ResultStatus.NOT_ONSCREEN
                 message = "Face visible but mouth not moving - not an onscreen dialogue"
+                if not had_face and self._move_frame_to(result, video, movement.face_start):
+                    # The line opened off camera - over a title card, or on a
+                    # cutaway. Reporting that frame next to "mouth not moving"
+                    # explains nothing; show the face the verdict is about.
+                    message += f"; frame moved to {result.frame.timestamp_str}, where that face is"
                 logger.info(
                     "Mouth still during %s-%s (score %.4f); verdict: not_onscreen",
                     format_timestamp(movement.window_start),
                     format_timestamp(movement.window_end),
                     movement.movement_score or 0.0,
                 )
+            elif movement.frames_with_face < self.settings.mouth_movement.min_face_frames:
+                # A handful of landmarked frames across a whole line is evidence
+                # *against* a face, not a missing measurement. BlazeFace fires on
+                # blurred rubble at 0.45-0.62 - higher than it scores some real
+                # faces - so a box it likes that the landmarker cannot land a
+                # mesh on must not fail open into "found".
+                result.status = ResultStatus.NOT_ONSCREEN
+                message = "No face visible during the line - not an onscreen dialogue"
+                logger.info(
+                    "Only %d/%d frames landmarked in %s-%s; verdict: not_onscreen",
+                    movement.frames_with_face,
+                    movement.frames_analyzed,
+                    format_timestamp(movement.window_start),
+                    format_timestamp(movement.window_end),
+                )
+            elif not had_face:
+                # Enough of a face to be real, but too fragmented to score, and
+                # the reported frame shows none: V2's verdict stands.
+                message = "No face visible during the line - not an onscreen dialogue"
+                logger.info(
+                    "No face to judge in %s-%s (%d/%d frames); verdict: not_onscreen",
+                    format_timestamp(movement.window_start),
+                    format_timestamp(movement.window_end),
+                    movement.frames_with_face,
+                    movement.frames_analyzed,
+                )
             else:
+                # A face was there throughout but its frames never lined up into
+                # a scorable run. That is a real "cannot tell", so fail open.
                 warning = (
                     "Mouth movement could not be judged: face landmarks in only "
                     f"{movement.frames_with_face} of {movement.frames_analyzed} frames."
@@ -507,6 +598,97 @@ class _Run:
                 message = warning
             self._emit(PipelineStage.MOUTH_MOVEMENT, message, 1.0, movement.to_dict())
         self._end(PipelineStage.MOUTH_MOVEMENT)
+
+    def _move_frame_to(
+        self, result: LocalizationResult, video: VideoInfo, target: float | None
+    ) -> bool:
+        """Re-extract the answer frame at ``target``, and re-run the face check.
+
+        A line's first frame is often not the frame worth showing. The brief
+        asks for the first frame where the character is *on camera* saying the
+        line, so on a positive verdict ``target`` is where the mouth was found
+        moving. On a negative one it is where the face that was judged silent
+        first appears - a line can open over a title card and cut to the speaker
+        immediately, and showing the title card next to "mouth not moving"
+        explains nothing.
+
+        Either way the V2 face check is redone there, so every visual field
+        describes the same frame. The localisation itself is untouched:
+        ``match.start`` still reports where the line begins in the audio, and
+        the two can be compared.
+
+        Returns whether the frame actually moved (it does not when the target is
+        the frame already reported). Fails open like the checks around it: on an
+        extraction or detection error the original frame stands, with a warning.
+        """
+        assert result.frame is not None
+        fps = video.fps or result.frame.fps
+        if target is None or not fps:
+            return False
+        if timestamp_to_frame(target, fps) == result.frame.frame_number:
+            return False  # already the frame being reported
+
+        try:
+            target, detection = self._confirm_face(video, target, fps)
+            frame = self.p.frame_extractor.extract(
+                video, target, self.output_dir / FRAME_FILENAME
+            )
+        except (FrameExtractionError, FaceDetectionError) as exc:
+            warning = (
+                f"A face is on camera at {format_timestamp(target)}, but that frame could "
+                f"not be extracted ({exc.message}); showing the line's first frame."
+            )
+            self.warnings.append(warning)
+            logger.warning("Frame move failed: %s", warning)
+            return False
+
+        logger.info(
+            "Face on camera from %s; answer frame moved %s -> %s (frame %d -> %d)",
+            format_timestamp(target),
+            result.frame.timestamp_str,
+            frame.timestamp_str,
+            result.frame.frame_number,
+            frame.frame_number,
+        )
+        result.frame = frame
+        result.face_detection = detection
+        return True
+
+    def _confirm_face(
+        self, video: VideoInfo, target: float, fps: float
+    ) -> tuple[float, FaceDetectionResult]:
+        """Pick the frame to report, starting from ``target``.
+
+        ``target`` is where the relevant window begins, but the detector is
+        marginal on exactly the faces this feature exists for - one scored 0.30
+        against a 0.30 threshold, so it flickered off again when the frame was
+        re-encoded as JPEG. Reporting that frame leaves the result saying "mouth
+        moving" and "no face" at once. So the first frames of the window are
+        probed and the first one the detector confirms is reported; its
+        detection is the one recorded, taken on the decoded frame rather than
+        the re-encoded image so the two agree by construction.
+
+        Falls back to ``target`` and its own detection when no frame in the
+        window is confirmed - the window scan is still the better evidence, and
+        the caller keeps the verdict.
+        """
+        first_frame = timestamp_to_frame(target - video.clip_start, fps)
+        probes = max(1, round(self.settings.mouth_movement.score_window_seconds * fps))
+        fallback: FaceDetectionResult | None = None
+        for offset in range(probes):
+            image = self.p.frame_extractor.read_frame(video, first_frame + offset, fps)
+            detection = self.p.face_detector.detect(image, log_result=False)
+            if detection.face_present:
+                return video.clip_start + (first_frame + offset) / fps, detection
+            if fallback is None:
+                fallback = detection
+        assert fallback is not None
+        logger.info(
+            "No frame in %s+%.1fs confirms a face; reporting the window's first frame",
+            format_timestamp(target),
+            probes / fps,
+        )
+        return target, fallback
 
     # ------------------------------------------------------------------ #
     def _scan(

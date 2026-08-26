@@ -14,6 +14,7 @@ from dialogue_locator.exceptions import (
     DialogueLocatorError,
     DownloadError,
     FaceDetectionError,
+    FrameExtractionError,
     InvalidDialogueError,
     InvalidURLError,
     MouthMovementError,
@@ -120,23 +121,61 @@ ONE_FACE = (FaceBox(x=10, y=10, width=50, height=50, confidence=0.9),)
 
 
 class FakeFaceDetector:
-    def __init__(self, faces: tuple[FaceBox, ...] = ONE_FACE, error: Exception | None = None):
+    """Answers both entry points the pipeline uses: ``detect_file`` for the V2
+    stage's saved frame, ``detect`` for the frames the mouth stage probes when
+    moving the answer frame to the speaker.
+
+    ``per_call`` scripts one answer per call across both, clamping to the last
+    entry, so a test can say "nothing on the line's first frame, a face on the
+    next one probed".
+    """
+
+    def __init__(
+        self,
+        faces: tuple[FaceBox, ...] = ONE_FACE,
+        error: Exception | None = None,
+        per_call: list[tuple[FaceBox, ...] | Exception] | None = None,
+    ):
         self.faces = faces
         self.error = error
-        self.paths: list[Path] = []
+        self.per_call = per_call
+        self.paths: list[Path] = []  # detect_file calls only
+        self.calls = 0  # both entry points
 
     def detect_file(self, path: Path) -> FaceDetectionResult:
         self.paths.append(path)
+        return self._answer()
+
+    def detect(self, image, log_result: bool = True) -> FaceDetectionResult:
+        return self._answer()
+
+    def _answer(self) -> FaceDetectionResult:
+        self.calls += 1
+        faces = self.faces
+        if self.per_call:
+            faces = self.per_call[min(self.calls, len(self.per_call)) - 1]
+        if isinstance(faces, Exception):
+            raise faces
         if self.error:
             raise self.error
-        return FaceDetectionResult(faces=self.faces, image_width=320, image_height=240)
+        return FaceDetectionResult(faces=faces, image_width=320, image_height=240)
 
 
-def mouth_result(moving: bool | None, score: float | None = 0.09) -> MouthMovementResult:
+def mouth_result(
+    moving: bool | None,
+    score: float | None = 0.09,
+    movement_start: float | None = None,
+    face_start: float | None = None,
+    frames_with_face: int | None = None,
+) -> MouthMovementResult:
     return MouthMovementResult(
         moving=moving, movement_score=score, threshold=0.02,
-        frames_analyzed=26, frames_with_face=26 if moving is not None else 2,
-        window_start=0.6, window_end=1.6,
+        frames_analyzed=26,
+        frames_with_face=(26 if moving is not None else 2)
+        if frames_with_face is None
+        else frames_with_face,
+        window_start=0.6, window_end=1.6, movement_start=movement_start,
+        face_start=face_start,
     )
 
 
@@ -417,6 +456,108 @@ def test_mouth_moving_keeps_found(settings, sample_video):
     assert d["mouth_moving"] is True and d["mouth_movement"]["movement_score"] == 0.09
 
 
+def test_frame_moves_to_where_the_speaker_comes_on_camera(settings, sample_video):
+    # The brief asks for the first frame where the character is on camera saying
+    # the line. When the line opens on someone else, the frame at its start
+    # shows the wrong person; the mouth check knows where the speaker appears.
+    ma = FakeMouthAnalyzer(mouth_result(moving=True, movement_start=1.0))
+    fd = FakeFaceDetector()
+    p, _ = make_pipeline(settings, sample_video, TRANSCRIPT, face_detector=fd, mouth_analyzer=ma)
+    result = p.run(PipelineRequest(source=str(sample_video), dialogue=DIALOGUE))
+
+    assert result.status is ResultStatus.FOUND and result.warnings == []
+    assert result.frame.frame_number == 25  # 1.0 s at 25 fps, not 0.6 s -> 15
+    assert result.timestamp == "00:00:01.000"
+    assert result.frame.image_path.is_file()
+    # The localisation is untouched: the line still starts where it was heard.
+    assert result.match.start == pytest.approx(0.6)
+    assert result.to_dict()["mouth_movement"]["movement_start"] == 1.0
+
+
+def test_moving_the_frame_re_runs_the_face_check_on_it(settings, sample_video):
+    # Every visual field must describe the frame being shown; leaving the face
+    # box from the old frame would describe the person who was not speaking.
+    other_face = (FaceBox(x=200, y=100, width=60, height=60, confidence=0.5),)
+    fd = FakeFaceDetector(per_call=[ONE_FACE, other_face])
+    ma = FakeMouthAnalyzer(mouth_result(moving=True, movement_start=1.0))
+    p, _ = make_pipeline(settings, sample_video, TRANSCRIPT, face_detector=fd, mouth_analyzer=ma)
+    result = p.run(PipelineRequest(source=str(sample_video), dialogue=DIALOGUE))
+    assert fd.calls == 2  # once on the line's first frame, once on the speaker's
+    assert result.face_detection.faces == other_face
+
+
+def test_moved_frame_never_reports_a_face_and_no_face_at_once(settings, sample_video):
+    # The detector is marginal on exactly the faces this feature exists for
+    # (one scored 0.30 against a 0.30 threshold), so the window's first frame
+    # can come back faceless while the window scan says the mouth is moving.
+    # The reported frame must be one the detector confirms, or the result reads
+    # as a contradiction.
+    fd = FakeFaceDetector(per_call=[ONE_FACE, (), (), ONE_FACE])
+    ma = FakeMouthAnalyzer(mouth_result(moving=True, movement_start=1.0))
+    p, _ = make_pipeline(settings, sample_video, TRANSCRIPT, face_detector=fd, mouth_analyzer=ma)
+    result = p.run(PipelineRequest(source=str(sample_video), dialogue=DIALOGUE))
+    assert result.status is ResultStatus.FOUND
+    assert result.face_present is True  # agrees with "mouth moving"
+    assert result.frame.frame_number == 27  # 1.0 s -> frame 25, skipped 25 and 26
+
+
+def test_silent_face_frame_moves_off_the_card_the_line_opened_on(settings, sample_video):
+    # A line can open over a title card and cut to the speaker immediately.
+    # Reporting the card next to "mouth not moving" explains nothing - and made
+    # the same line report two different reasons depending on whether its first
+    # word was included. The frame moves to the face the verdict is about.
+    fd = FakeFaceDetector(per_call=[(), ONE_FACE])
+    ma = FakeMouthAnalyzer(mouth_result(moving=False, score=0.003, face_start=1.0))
+    p, _ = make_pipeline(settings, sample_video, TRANSCRIPT, face_detector=fd, mouth_analyzer=ma)
+    result = p.run(PipelineRequest(source=str(sample_video), dialogue=DIALOGUE))
+    assert result.status is ResultStatus.NOT_ONSCREEN
+    assert result.frame.frame_number == 25  # 1.0 s, where the face is
+    assert result.face_present is True  # and the reason reads consistently
+
+
+def test_silent_face_already_on_camera_keeps_its_frame(settings, sample_video):
+    # The common case: the line opens on the speaker. Nothing to move.
+    ma = FakeMouthAnalyzer(mouth_result(moving=False, score=0.003, face_start=1.0))
+    fd = FakeFaceDetector()
+    p, _ = make_pipeline(settings, sample_video, TRANSCRIPT, face_detector=fd, mouth_analyzer=ma)
+    result = p.run(PipelineRequest(source=str(sample_video), dialogue=DIALOGUE))
+    assert result.status is ResultStatus.NOT_ONSCREEN
+    assert result.frame.frame_number == 15  # floor(0.6 * 25), untouched
+    assert fd.calls == 1
+
+
+def test_frame_stays_when_the_speaker_is_on_camera_from_the_start(settings, sample_video):
+    # Movement found at the line's own first frame: nothing to move, and no
+    # second extraction or face check to pay for.
+    ma = FakeMouthAnalyzer(mouth_result(moving=True, movement_start=0.6))
+    fd = FakeFaceDetector()
+    p, _ = make_pipeline(settings, sample_video, TRANSCRIPT, face_detector=fd, mouth_analyzer=ma)
+    result = p.run(PipelineRequest(source=str(sample_video), dialogue=DIALOGUE))
+    assert result.frame.frame_number == 15  # floor(0.6 * 25)
+    assert fd.calls == 1  # no second frame to check
+
+
+def test_failed_frame_move_keeps_the_original_frame(settings, sample_video):
+    # Fails open like the checks around it: a re-extraction that cannot run
+    # must not lose the answer already in hand.
+    ma = FakeMouthAnalyzer(mouth_result(moving=True, movement_start=1.0))
+    p, _ = make_pipeline(settings, sample_video, TRANSCRIPT, mouth_analyzer=ma)
+
+    def explode(video, timestamp, dest_path):
+        raise FrameExtractionError("disk full")
+
+    original = p.frame_extractor.extract
+    p.frame_extractor.extract = lambda *a, **k: (
+        explode(*a, **k) if a[1] > 0.9 else original(*a, **k)
+    )
+    logger.info(">>> expecting a WARNING: the speaker's frame could not be extracted")
+    result = p.run(PipelineRequest(source=str(sample_video), dialogue=DIALOGUE))
+    assert result.status is ResultStatus.FOUND
+    assert result.frame.frame_number == 15  # the line's first frame still stands
+    assert any("could not be extracted" in w for w in result.warnings)
+    logger.info("<<< warning recorded as expected")
+
+
 def test_still_mouth_makes_result_not_onscreen(settings, sample_video):
     ma = FakeMouthAnalyzer(mouth_result(moving=False, score=0.003))
     p, _ = make_pipeline(settings, sample_video, TRANSCRIPT, mouth_analyzer=ma)
@@ -428,7 +569,9 @@ def test_still_mouth_makes_result_not_onscreen(settings, sample_video):
 
 
 def test_indeterminate_mouth_fails_open_with_warning(settings, sample_video):
-    ma = FakeMouthAnalyzer(mouth_result(moving=None, score=None))
+    # A face on camera throughout whose frames never line up into a scorable
+    # run is genuinely unmeasured, so the localisation stands.
+    ma = FakeMouthAnalyzer(mouth_result(moving=None, score=None, frames_with_face=20))
     p, _ = make_pipeline(settings, sample_video, TRANSCRIPT, mouth_analyzer=ma)
     logger.info(">>> expecting a WARNING: mouth movement indeterminate, verdict kept")
     result = p.run(PipelineRequest(source=str(sample_video), dialogue=DIALOGUE))
@@ -436,6 +579,19 @@ def test_indeterminate_mouth_fails_open_with_warning(settings, sample_video):
     assert result.mouth_moving is None and result.mouth_movement is not None
     assert any("could not be judged" in w for w in result.warnings)
     logger.info("<<< warning recorded as expected")
+
+
+def test_a_face_nothing_can_landmark_is_not_a_face(settings, sample_video):
+    # Regression: BlazeFace fires on blurred rubble at 0.45-0.62, above what it
+    # scores some real faces, so the face check alone reported "found" on a
+    # frame with no face in it. A box the landmarker cannot land a mesh on for
+    # even a handful of frames must not fail open.
+    ma = FakeMouthAnalyzer(mouth_result(moving=None, score=None, frames_with_face=4))
+    p, _ = make_pipeline(settings, sample_video, TRANSCRIPT, mouth_analyzer=ma)
+    result = p.run(PipelineRequest(source=str(sample_video), dialogue=DIALOGUE))
+    assert result.status is ResultStatus.NOT_ONSCREEN
+    assert result.face_present is True  # V2 was fooled; the window scan was not
+    assert result.warnings == []
 
 
 def test_mouth_analyzer_failure_fails_open_with_warning(settings, sample_video):
@@ -448,14 +604,50 @@ def test_mouth_analyzer_failure_fails_open_with_warning(settings, sample_video):
     logger.info("<<< warning recorded as expected")
 
 
-def test_no_face_skips_mouth_check(settings, sample_video):
-    ma = FakeMouthAnalyzer()
+def test_line_starting_off_camera_is_onscreen_once_the_speaker_appears(settings, sample_video):
+    # A line can open on a title card or a cutaway and cut to the speaker a
+    # frame later. Judging only the first frame called that "no face"; the
+    # window scan finds the speaker and the verdict follows the whole line.
+    ma = FakeMouthAnalyzer(mouth_result(moving=True, movement_start=1.0))
+    fd = FakeFaceDetector(per_call=[(), ONE_FACE])  # nothing at the start, a face later
+    p, _ = make_pipeline(settings, sample_video, TRANSCRIPT, face_detector=fd, mouth_analyzer=ma)
+    result = p.run(PipelineRequest(source=str(sample_video), dialogue=DIALOGUE))
+
+    assert result.status is ResultStatus.FOUND
+    assert result.frame.frame_number == 25  # moved to where the speaker appears
+    assert result.face_present is True  # re-checked on that frame
+    assert ma.calls, "the mouth check must run even with no face in the first frame"
+
+
+def test_no_face_anywhere_in_the_line_stays_not_onscreen(settings, sample_video):
+    # The other side of the same change: with nothing to judge in the window
+    # either, V2's verdict stands - and is not downgraded to a warning.
+    ma = FakeMouthAnalyzer(mouth_result(moving=None, score=None))
     p, _ = make_pipeline(settings, sample_video, TRANSCRIPT,
                          face_detector=FakeFaceDetector(faces=()), mouth_analyzer=ma)
     result = p.run(PipelineRequest(source=str(sample_video), dialogue=DIALOGUE))
-    assert result.status is ResultStatus.NOT_ONSCREEN  # from the face gate
-    assert ma.calls == [] and result.mouth_movement is None
-    assert "mouth_movement" not in result.stage_timings
+    assert result.status is ResultStatus.NOT_ONSCREEN
+    assert result.mouth_movement is not None  # the window was actually scanned
+    assert result.warnings == []
+
+
+def test_unmovable_speaker_frame_does_not_claim_onscreen(settings, sample_video):
+    # Mouth moving, first frame faceless, and the speaker's frame cannot be
+    # extracted: claiming "onscreen" over a frame that shows no face would be a
+    # lie, so the verdict stays not_onscreen.
+    ma = FakeMouthAnalyzer(mouth_result(moving=True, movement_start=1.0))
+    p, _ = make_pipeline(settings, sample_video, TRANSCRIPT,
+                         face_detector=FakeFaceDetector(faces=()), mouth_analyzer=ma)
+
+    original = p.frame_extractor.extract
+    p.frame_extractor.extract = lambda *a, **k: (
+        (_ for _ in ()).throw(FrameExtractionError("disk full")) if a[1] > 0.9 else original(*a, **k)
+    )
+    logger.info(">>> expecting a WARNING: the speaker's frame could not be extracted")
+    result = p.run(PipelineRequest(source=str(sample_video), dialogue=DIALOGUE))
+    assert result.status is ResultStatus.NOT_ONSCREEN
+    assert any("could not be extracted" in w for w in result.warnings)
+    logger.info("<<< warning recorded as expected")
 
 
 def test_face_stage_disabled_skips_all_visual_checks(settings, sample_video):

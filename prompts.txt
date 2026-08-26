@@ -105,38 +105,17 @@ me how I can run and test it. Only continue to the next module after I explicitl
 current one.
 dont add or commit to git by yourself. ill do that part after testing and verifying.
 
-How the session was run
------------------------
-Prompt 0 above was pasted into Claude Code (Anthropic, Claude Fable 5) in VS Code on 2026-08-24.
-Because it asked for one module at a time with explicit approval, most of the later prompts are
-short: an approval to move to the next module, or a correction/question about what had just
-been shown. They are reproduced below verbatim, in order, exactly as typed (typos included), so
-they match the session transcript. Long error/log pastes are shortened with "(...)".
-Text in [brackets] is added here for context only and was not part of the prompt.
-Every commit was made by hand after testing each step.
 
 
-Prompt 1:  [after Step 1: scaffold, config.py, exceptions.py, logging_config.py]
-okay approve
-continue
-
-Prompt 2:  [after Step 2: models.py]
-approve
-
-Prompt 3:  [after Step 3: media/probe.py, media/downloader.py]
-approve
-
-Prompt 4:  [after Step 4: media/audio.py]
+Prompt 1:  [after Step 4: media/audio.py]
 generate tests and unit tests to verify media classes, unit tests and sample test scripts that
 imports and uses these class files
 
-Prompt 5:  [after the test suite for config/models/probe/downloader/audio was added]
-approve
 
-Prompt 6:
+Prompt 2:
 give logs for tests, i want clear visiblity on whats going on
 
-Prompt 7:  [pasted from the live test log]
+Prompt 3:  [pasted from the live test log]
 21:43:55.588 INFO    dialogue_locator.transcription.faster_whisper: [faster_whisper:fake-small]
 transcribing 1.0s of audio (offset 0.00s, lang=en, beam=5, vad=True)
 21:43:55.588 ERROR   dialogue_locator.transcription.faster_whisper: [faster_whisper:fake-small]
@@ -145,7 +124,7 @@ PASSED
 
 dialouge locator faster whister is failing the tests look into itm i think there is a decoding issue.
 
-Prompt 8:  [pasted from the live test log]
+Prompt 4:  [pasted from the live test log]
 21:45:02.109 INFO    tests: >>> expecting ConfigurationError (an ERROR line below is the code
 under test rejecting bad input)
 21:45:02.183 INFO    dialogue_locator.media.audio: Extracting audio from sample.mp4 -> (...)
@@ -156,34 +135,20 @@ PASSED
 
 again ffmpeg error for dialouge locator test.
 
-Prompt 9:
+Prompt 5:
 i think we need to do the same analysis and checks on other tests, cause i can see other tests like media tests with similar errors.
 
-Prompt 10:  [answering a question about the deleted src/examples/ directory]
+Prompt 6:  [answering a question about the deleted src/examples/ directory]
 was deleting src/examples/ intentional? yes
 
-Prompt 11:  [after Step 5: transcription/base.py, transcription/faster_whisper.py]
-approve
 
-Prompt 12:  [after Step 6: matching/normalize.py, matching/matcher.py]
-approve
-
-Prompt 13:  [Step 7 was started, interrupted, and resumed]
-continue
-
-Prompt 14:  [after Step 7: verification/base.py, verification/asr_verifier.py]
-approve
-
-Prompt 15:  [after Step 8: media/frames.py]
-approve
-
-Prompt 16:  [after Step 9: pipeline/pipeline.py, cli.py, first real runs]
+Prompt 7:  [after Step 9: pipeline/pipeline.py, cli.py, first real runs]
 okay do it, lets have with clear logs
 
-Prompt 18:  [after Step 10: api/]
+Prompt 8:  [after Step 10: api/]
 yes, make sure its job based approch.
 
-Prompt 19:  [pasted from the web UI after running the problem-statement video]
+Prompt 9:  [pasted from the web UI after running the problem-statement video]
 3. Result
 Failed during download: Download failed: [Odnoklassniki] 248244667877: Unable to download
 webpage: [Errno 54] Connection reset by peer (caused by TransportError('[Errno 54] Connection
@@ -191,7 +156,7 @@ reset by peer'))
 (...)
 there is a connection error, we need a fall back for it.
 
-Prompt 20:  [pasted from the web UI]
+Prompt 10:  [pasted from the web UI]
 2. Processing #f49a1df7b595
 (...)
 download: Downloading 0% 0%
@@ -205,10 +170,10 @@ Event log
 
 html is not shwoing the progress in downloads, i can see backend working properly its a frontend issue.
 
-Prompt 21:
+Prompt 11:
 give end script to run the backend
 
-Prompt 22:  [pasted from the web UI after restarting the server]
+Prompt 12:  [pasted from the web UI after restarting the server]
 2. Processing #f49a1df7b595
 (...)
 Lost contact with job: "Job f49a1df7b595 not found"
@@ -217,50 +182,50 @@ Event log
 
 if a job is not found, cause its in memory, remove the job from in memeory in the frontend.
 
-Prompt 23:  [making "base" the default streaming model]
+Prompt 13:  [making "base" the default streaming model]
 okay make base/lowest wispher model as  default
 
-Prompt 24:
+Prompt 14:
 make the UI html proper, its so bad (errors in showing progress, no fall backs and no proper layout), for now one shot the frontend and once done create docs/ for docs to whole codebase
 mainly in src/ explain each and everything properly so that future we can refer that
 
-Prompt 25:  [sent while the UI was being redesigned]
+Prompt 15:  [sent while the UI was being redesigned]
 keep it in light theame and big fonts
 
 
-Prompt 25: [optimise the download time]
+Prompt 16: [optimise the download time]
 instead of downloading whole video in high quality lets load the audio or lowest video quality present and then once we find the fuzzy matching chucks for each chuck while before starting verification we'll download the highest quality video, do u think we should modify as such in the code-base
 
-Prompt 26: [corrections in claude implementation plan]
+Prompt 17: [corrections in claude implementation plan]
 
 i think now max height from config is not needed, cause we are going to search audio itself right, no need of cap heights.
 
-Prompt 27:
+Prompt 18:
 only after verifying the clip with high Whisper model we should go download only that clip, beacuse this then reduces downloading whole clip from 55mins to 6sec per clip.
 
-Prompt 28:  [pasted the not_found result JSON for an Infinity War upload (149 min), dialogue
+Prompt 19:  [pasted the not_found result JSON for an Infinity War upload (149 min), dialogue
 "you're not the only one cursed with knowledge"; best near-miss 63.3 at 01:20:43]
 { "status": "not_found", (...) "near_misses": [ (...) ] }
 but the dialouge is at 2:00:00 why can it find it
 
-Prompt 29:  [the diagnosis showed the VAD filter dropping the line under the loud battle score
+Prompt 20:  [the diagnosis showed the VAD filter dropping the line under the loud battle score
 (all three models got the same 18 words in that 5-minute window; VAD off heard it at 100.0);
 approving the proposed retry-without-VAD fallback pass]
 okay
 
-Prompt 30 : For V2, we already have the dialogue-matching timestamp and the corresponding video frame from V1. Now, instead of processing the entire video again, we should work only with the relevant video/frame around the matched dialogue.
+Prompt 21: For V2, we already have the dialogue-matching timestamp and the corresponding video frame from V1. Now, instead of processing the entire video again, we should work only with the relevant video/frame around the matched dialogue.
 The first step in V2 is to check whether a human face is visible on camera in the matched frame. We need to detect whether at least one human face is present in the frame corresponding to the dialogue.For now, V2 should only focus on human face detection.
 After implementing each module or file, stop and ask for my approval before continuing. Do not assume or guess any requirements that I have not specified.
 
-Prompt 31 : After V2 confirms that a human face is present, the initial version of V3 should focus only on detecting whether the person's mouth is moving.
+Prompt 22: After V2 confirms that a human face is present, the initial version of V3 should focus only on detecting whether the person's mouth is moving.
 
 Use MediaPipe Face Landmarker to track the facial landmarks across a short video segment around the matched dialogue timestamp. Extract the relevant mouth/lip landmarks and analyze their movement across consecutive frames.
 
 The goal at this stage is simply to determine whether there is significant mouth movement while the dialogue is being spoken.
 
 
-Prompt 31 :
+Prompt 23:
 Since we completed most part now, lets refine the frontend a little, first the config is static, lets make it variable, so for given job requiers a config, and based on that config the job is exicuted if no config is provided, then use our default config.
  and with that make a settings button in top right corner of frontend, and when clicked opens a pop-up it should show all the parameters and have validators, mainly the verification selection should be dependent in order like wishpher -> face -> lips detection.
 
- 
+
