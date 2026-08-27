@@ -1,9 +1,6 @@
 PROMPTS USED TO BUILD THIS PROJECT
 ===================================
 
-I used Claude for code implementation and ChatGPT for refining and structuring the larger prompts used during development.
-
-
 Prompt 0:
 
 Think of yourself as a senior Python developer and software architect. Write clean, modular,
@@ -180,7 +177,7 @@ html is not shwoing the progress in downloads, i can see backend working properl
 Prompt 10:
 give end script to run the backend
 
-Prompt 12:
+Prompt 11:
   [pasted from the web UI after restarting the server]
 2. Processing #f49a1df7b595
 (...)
@@ -190,44 +187,44 @@ Event log
 
 if a job is not found, cause its in memory, remove the job from in memeory in the frontend.
 
-Prompt 11:  
+Prompt 12:  
 [making "base" the default streaming model]
 okay make base/lowest wispher model as  default
 
-Prompt 12:
+Prompt 13:
 make the UI html proper, its so bad (errors in showing progress, no fall backs and no proper layout), for now one shot the frontend and once done create docs/ for docs to whole codebase
 mainly in src/ explain each and everything properly so that future we can refer that
 
-Prompt 13:
+Prompt 14:
   [sent while the UI was being redesigned]
 keep it in light theame and big fonts
 
 
-Prompt 14:
+Prompt 15:
  [optimise the download time]
 instead of downloading whole video in high quality lets load the audio or lowest video quality present and then once we find the fuzzy matching chucks for each chuck while before starting verification we'll download the highest quality video, do u think we should modify as such in the code-base
 
-Prompt 15:
+Prompt 16:
  [corrections in claude implementation plan]
 
 i think now max height from config is not needed, cause we are going to search audio itself right, no need of cap heights.
 
-Prompt 16:
+Prompt 17:
 only after verifying the clip with high Whisper model we should go download only that clip, beacuse this then reduces downloading whole clip from 55mins to 6sec per clip.
 
-Prompt 17: 
+Prompt 18: 
  [pasted the not_found result JSON for an Infinity War upload (149 min), dialogue
 "you're not the only one cursed with knowledge"; best near-miss 63.3 at 01:20:43]
 { "status": "not_found", (...) "near_misses": [ (...) ] }
 but the dialouge is at 2:00:00 why can it find it
 
 
-Prompt 18:
+Prompt 19:
  For V2, we already have the dialogue-matching timestamp and the corresponding video frame from V1. Now, instead of processing the entire video again, we should work only with the relevant video/frame around the matched dialogue.
 The first step in V2 is to check whether a human face is visible on camera in the matched frame. We need to detect whether at least one human face is present in the frame corresponding to the dialogue.For now, V2 should only focus on human face detection.
 After implementing each module or file, stop and ask for my approval before continuing. Do not assume or guess any requirements that I have not specified.
 
-Prompt 19: 
+Prompt 20: 
 After V2 confirms that a human face is present, the initial version of V3 should focus only on detecting whether the person's mouth is moving.
 
 Use MediaPipe Face Landmarker to track the facial landmarks across a short video segment around the matched dialogue timestamp. Extract the relevant mouth/lip landmarks and analyze their movement across consecutive frames.
@@ -235,38 +232,38 @@ Use MediaPipe Face Landmarker to track the facial landmarks across a short video
 The goal at this stage is simply to determine whether there is significant mouth movement while the dialogue is being spoken.
 
 
-Prompt 20:
+Prompt 21:
 Since we completed most part now, lets refine the frontend a little, first the config is static, lets make it variable, so for given job requiers a config, and based on that config the job is exicuted if no config is provided, then use our default config.
  and with that make a settings button in top right corner of frontend, and when clicked opens a pop-up it should show all the parameters and have validators, mainly the verification selection should be dependent in order like wishpher -> face -> lips detection.
 
 
-Prompt 21:
+Prompt 22:
 In this video i gave, while the person is talking another person is showed, but at the end of the dialogue that person is shown like "mutating dna part " camera shifts to the speaker. thats also on screen dialogue right..but its shown not as an on screen dialogue
 
-Prompt 22:
+Prompt 23:
 Ill tell you the edge cases properly
 Full face shown + mouth moving → on-screen
 Full face shown + mouth NOT moving (narration/voiceover/dubbed) → off-screen
 Face shown first with mouth movement, then camera cuts away for rest of dialogue → on-screen
 Dialogue starts off-camera, camera returns to speaker mid-dialogue (with mouth movement visible once shown) → on-screen
 
-Prompt 23:
+Prompt 24:
   [screenshot of the result panel: "face detected" but "no mouth movement", for
 "my name is peter parker"; the same line with "hi" in front reported no face at all]
 this is the only problem now, my name is peter parker has face but no mouth movement and its
 correct but when hi is included its showing no face no mouth movement
 
-Prompt 24:
+Prompt 25:
   [https://www.youtube.com/watch?v=MqE5ZIU3Ao0 - a fan-made trailer; the matched frame
 is a shot of falling rubble with nobody in it]
 there was no face, no mouth in this part, and still detected
 
-Prompt 25: 
+Prompt 26: 
  [screenshot of the FRIENDS bookshelf scene - three people in a wide shot, the speaker
 in a red shirt roughly 2.5% of the frame width]
 the red shirt guy is saying the dialogue i gave, and it is saying its off screen dialogue. why
 
-Prompt 26:
+Prompt 27:
   [after the wide-shot diagnosis showed the fix needed tiled detection plus per-face
 tracking - deciding to stop adding features and consolidate instead]
 deadline for this project is 11.59pm today. so i dont think its a right time to do this as time
@@ -274,12 +271,10 @@ limits. we need not overengineer this. lets put this case as future dev case. an
 refining and optimizing.
 what do u think?
 
-Prompt 27 :
+Prompt 28 :
  Okay so if there is a dialogue “how are you” and this appears 3 times  in given video and first time face doesn’t exist , 2nd one has face but doesn’t match mouth movement and last at the end it has face and matches mouth movement
 How the application handles it
 
-Prompt 28 :
-should we fix it in code , like is it  complex? how many code changes? optimize and say the minimal changes required
 
 Prompt 29 :
 So in the given implementation, I want to know how it works, in my given three cases, say the flow and dry run it and show how it exactly works.
@@ -303,3 +298,6 @@ u know what when a face is detected just show whether it is detected or not , ju
 
 Prompt 33 : 
 Also, in the settings, we can currently specify the number of occurrences. But for some videos, we may not know how many times the dialogue occurs. In that case, add -1 as an option, where -1 means the pipeline should iterate through the entire video and evaluate all occurrences until there are no more matches.
+
+
+~I used Claude for code implementation and ChatGPT for refining and structuring the larger prompts used during development.
